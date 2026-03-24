@@ -65,17 +65,21 @@ int main (void) {
     *(pixel_ctrl_ptr + 1) = (int) &Buffer2;
     pixel_buffer_start = *(pixel_ctrl_ptr + 1); // we draw on the back buffer
 	clear_screen();
-	
-	//initialize mouse position
-	init_mouse();
-	clear_ps2();
-	
-	int prevMouseX1 = 160, prevMouseY1 = 120;  // 1 frame ago
-	int prevMouseX2 = 160, prevMouseY2 = 120;  // 2 frames ago
-	
+		
 	//toggle states
 	int playActive = 0;
 	int recordActive = 0;
+
+	draw_main_screen(playActive, recordActive);
+    draw_cursor(mouseX, mouseY, 0xFFFF);
+    wait_for_vsync(); 
+    pixel_buffer_start = *(pixel_ctrl_ptr + 1); 
+
+	//initialize mouse position
+	init_mouse();
+	
+	int prevMouseX1 = 160, prevMouseY1 = 120;  // 1 frame ago
+	int prevMouseX2 = 160, prevMouseY2 = 120;  // 2 frames ago
 
 	while (1) {
 		draw_main_screen(playActive, recordActive);
@@ -477,10 +481,19 @@ void wait_for_vsync() {
 
 void init_mouse() {
     volatile int *ps2_ptr = (int *)PS2_BASE;
-    // send 0xFF to reset the mouse
-    *(ps2_ptr + 1) = 0xFF;
-    // send 0xF4 to enable data reporting
-    *(ps2_ptr + 1) = 0xF4;
+
+    clear_ps2();
+
+    // Send reset
+    *ps2_ptr = 0xFF;
+
+    clear_ps2();
+
+    // Enable data reporting
+    *ps2_ptr = 0xF4;
+
+    // Drain ack
+    clear_ps2();
 }
 
 int read_ps2_byte() {
@@ -495,8 +508,9 @@ int read_ps2_byte() {
 
 void clear_ps2() {
     volatile int *ps2_ptr = (int *)PS2_BASE;
-    // drain any leftover bytes in the FIFO
-    while (*ps2_ptr & 0x8000);
+    // keep reading while RVALID is set
+    while (*ps2_ptr & 0x8000)
+        (void)*ps2_ptr;  // consume the byte
 }
 
 void read_mouse(int *clicked, int *clickX, int *clickY) {
@@ -507,8 +521,10 @@ void read_mouse(int *clicked, int *clickX, int *clickY) {
     while (1) {
         // check if byte1 is available
         data = *ps2_ptr;
-        if ((data & 0x8000) == 0) break;  // no data at all, exit
+        if ((data & 0x8000) == 0) return;  // no data at all, exit
+
         byte1 = data & 0xFF;
+        if(!(byte1 & 0x08)) return;
 
         // wait for byte2 — must complete the packet
         do { data = *ps2_ptr; } while ((data & 0x8000) == 0);
@@ -522,11 +538,14 @@ void read_mouse(int *clicked, int *clickX, int *clickY) {
         int dx = (int)(signed char)byte2;
         int dy = (int)(signed char)byte3;
 
+        if (byte1 & 0x40) dx = 0;
+        if (byte1 & 0x80) dy = 0;
+
         dx = dx / 5;
         dy = dy / 5;
 
         mouseX += dx;
-        mouseY += dy;
+        mouseY -= dy;
 
         if (mouseX < 0)   mouseX = 0;
         if (mouseX > 319) mouseX = 319;
