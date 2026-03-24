@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <stdbool.h>
+extern int metronome_samples[];
 
 //function declarations
 void plot_pixel(int x, int y, short int line_color);
@@ -45,8 +46,6 @@ int mouseY = 120;
 #define AUDIO_RIGHT       (*(volatile int *)(AUDIO_BASE + 0xC))
 // Sampled at 8KHz, mono, 32b int per sample
 #define AUDIO_NUM_SAMPLES 19798
-
-const int audio_samples[];
 
 int main (void) {
 	volatile int * pixel_ctrl_ptr = (int *)FRAME_BASE;
@@ -120,8 +119,8 @@ int main (void) {
 void play_audio() {
     for (int i = 0; i < AUDIO_NUM_SAMPLES; i++) {
         while (((AUDIO_FIFOSPACE >> 16) & 0xFF) == 0);
-        AUDIO_LEFT  = (int)audio_samples[i];
-        AUDIO_RIGHT = (int)audio_samples[i];
+        AUDIO_LEFT  = (int)metronome_samples[i];
+        AUDIO_RIGHT = (int)metronome_samples[i];
     }
 }
 
@@ -562,7 +561,7 @@ void read_mouse(int *clicked, int *clickX, int *clickY) {
 
 //metronome audio
 
-const int audio_samples[] = {
+const int metronome_samples[] = {
     0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
     0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
     0x00000000, 0x00000000, 0x00000000, 0xFFFFFFFF, 0x00000000, 0x00000000, 0x00000000, 0xFFFFFFFE,
