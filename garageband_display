@@ -34,16 +34,16 @@ int piano_samples[1] = {0};
 int vocal_samples[1] = {0};
 
 //bass drum sample
-extern const int bass_samples[1] = {0};
-extern const int bass_samples_n = 1; 
+extern int bass_samples[];
+extern int bass_samples_n; 
 
 //snare drum sample
-extern const int snare_samples[1] = {0};   
-extern const int snare_samples_n = 1; 
+extern int snare_samples[];   
+extern int snare_samples_n; 
 
 //hihat sample
-extern const int hihat_samples[1] = {0};   
-extern const int hihat_samples_n = 1; 
+extern int hihat_samples[];   
+extern int hihat_samples_n; 
 
 // ==========================================
 // Global Variables & Data Structures
