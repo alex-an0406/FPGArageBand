@@ -1,28 +1,28 @@
-#include <stdlib.h>
 #include <stdbool.h>
+#include <stdlib.h>
 
 // ==========================================
 // Global Constants & Macros
 // ==========================================
-#define PS2_BASE        0xFF200100
-#define FRAME_BASE      0xFF203020
+#define PS2_BASE 0xFF200100
+#define FRAME_BASE 0xFF203020
 
-#define AUDIO_BASE        0xFF203040
-#define AUDIO_CTRL        (*(volatile int *)(AUDIO_BASE + 0x0))
-#define AUDIO_FIFOSPACE   (*(volatile int *)(AUDIO_BASE + 0x4))
-#define AUDIO_LEFT        (*(volatile int *)(AUDIO_BASE + 0x8))
-#define AUDIO_RIGHT       (*(volatile int *)(AUDIO_BASE + 0xC))
+#define AUDIO_BASE 0xFF203040
+#define AUDIO_CTRL (*(volatile int*)(AUDIO_BASE + 0x0))
+#define AUDIO_FIFOSPACE (*(volatile int*)(AUDIO_BASE + 0x4))
+#define AUDIO_LEFT (*(volatile int*)(AUDIO_BASE + 0x8))
+#define AUDIO_RIGHT (*(volatile int*)(AUDIO_BASE + 0xC))
 
-#define TIMER_FREQ      100000000 
-#define TIMER_BASE      0xFF202000
-#define TIMER_STATUS    (*(volatile int *)(TIMER_BASE))
-#define TIMER_CTRL      (*(volatile int *)(TIMER_BASE + 0x4))
-#define TIMER_LOW       (*(volatile int *)(TIMER_BASE + 0x8))
-#define TIMER_HIGH      (*(volatile int *)(TIMER_BASE + 0xC))
+#define TIMER_FREQ 100000000
+#define TIMER_BASE 0xFF202000
+#define TIMER_STATUS (*(volatile int*)(TIMER_BASE))
+#define TIMER_CTRL (*(volatile int*)(TIMER_BASE + 0x4))
+#define TIMER_LOW (*(volatile int*)(TIMER_BASE + 0x8))
+#define TIMER_HIGH (*(volatile int*)(TIMER_BASE + 0xC))
 
 #define MAX_INSTRUMENTS 9
 #define NUM_STEPS 32
-#define VOLUME_MULTIPLIER 1 
+#define VOLUME_MULTIPLIER 1
 
 // ==========================================
 // Local Audio Data
@@ -33,38 +33,50 @@ int METRONOME_NUM_SAMPLES = 1;
 int piano_samples[1] = {0};
 int vocal_samples[1] = {0};
 
-//bass drum sample
-extern int bass_samples[];
-extern int bass_samples_n; 
+// bass drum sample
+//  Audio sample generated from kick_drum.wav
+//  Sample Rate: 8000 Hz, Mono, 32-bit signed
+//  Total samples: 7509
 
-//snare drum sample
-extern int snare_samples[];   
-extern int snare_samples_n; 
+extern int bass_samples[] = {};
+extern int bass_samples_n;
 
-//hihat sample
-extern int hihat_samples[];   
-extern int hihat_samples_n; 
+// snare drum sample
+// Audio sample generated from snare_drum.wav
+// Sample Rate: 8000 Hz, Mono, 32-bit signed
+// Total samples: 7509
+
+extern int snare_samples[] = {};
+extern int snare_samples_n;
+
+
+// Audio sample generated from hihat.wav
+// Sample Rate: 8000 Hz, Mono, 32-bit signed
+// Total samples: 5120
+
+extern int hihat_samples[] = {};
+extern int hihat_samples_n;
 
 // ==========================================
 // Global Variables & Data Structures
 // ==========================================
 volatile int pixel_buffer_start;
-short int Buffer1[240][512]; 
+short int Buffer1[240][512];
 short int Buffer2[240][512];
 
 // Global Mouse State
-int mouseX = 160;  
+int mouseX = 160;
 int mouseY = 120;
 int global_clicked = 0;
 int global_clickX = 0;
 int global_clickY = 0;
 
 // Cursor Pixel Cache [Center, Right, Left, Down, Up]
-short int cursor_bg[5] = {0,0,0,0,0};
+short int cursor_bg[5] = {0, 0, 0, 0, 0};
 
 // Global Playback State
-int playActive = 0; 
-int track_pos[MAX_INSTRUMENTS]; 
+int playActive = 0;
+int track_pos[MAX_INSTRUMENTS];
 int current_tick = 0;
 int sample_counter = 0;
 int beats_per_minute = 120;
@@ -73,22 +85,21 @@ int beats_per_minute = 120;
 int last_drawn_tick = -1;
 
 // Map the instrument types to arrays
-const int* sample_pointers[6] = {
-    NULL, piano_samples, vocal_samples, hihat_samples, snare_samples, bass_samples
-};
+const int* sample_pointers[6];
+
 int sample_lengths[6] = {0, 1, 1, 1, 1, 1};
 int sequencer_grid[MAX_INSTRUMENTS][NUM_STEPS] = {0};
 
 const int step_x_bounds[NUM_STEPS + 1] = {
-    21, 30, 40, 50, 59, 68, 77, 86, 96, 105, 114, 123, 133, 142, 151, 160, 
-    170, 179, 188, 197, 207, 216, 225, 234, 244, 253, 262, 271, 281, 290, 299, 308, 319
-};
+    21,  30,  40,  50,  59,  68,  77,  86,  96,  105, 114,
+    123, 133, 142, 151, 160, 170, 179, 188, 197, 207, 216,
+    225, 234, 244, 253, 262, 271, 281, 290, 299, 308, 319};
 
 // UI Layout Variables
 int new_instrument_location_y1 = 29;
 int new_instrument_location_y2 = 49;
-int add_instrument_plus_y0 = 39; 
-int add_instrument_plus_y1 = 36; 
+int add_instrument_plus_y0 = 39;
+int add_instrument_plus_y1 = 36;
 int add_instrument_plus_y2 = 43;
 
 int instrument_separator_positions[MAX_INSTRUMENTS] = {0};
@@ -97,32 +108,44 @@ int instrument_count = 0;
 int instrument_label_positions[MAX_INSTRUMENTS] = {1, 1, 1, 1, 1, 1, 1, 1, 1};
 
 static const int characters[26][7] = {
-    {0x0E,0x11,0x11,0x1F,0x11,0x11,0x00}, {0x1E,0x11,0x11,0x1E,0x11,0x1E,0x00}, 
-    {0x0E,0x11,0x10,0x10,0x11,0x0E,0x00}, {0x1E,0x11,0x11,0x11,0x11,0x1E,0x00}, 
-    {0x1F,0x10,0x10,0x1E,0x10,0x1F,0x00}, {0x1F,0x10,0x10,0x1E,0x10,0x10,0x00}, 
-    {0x0E,0x11,0x10,0x17,0x11,0x0F,0x00}, {0x11,0x11,0x11,0x1F,0x11,0x11,0x00}, 
-    {0x0E,0x04,0x04,0x04,0x04,0x0E,0x00}, {0x07,0x02,0x02,0x02,0x12,0x0C,0x00}, 
-    {0x11,0x12,0x14,0x18,0x14,0x13,0x00}, {0x10,0x10,0x10,0x10,0x10,0x1F,0x00}, 
-    {0x11,0x1B,0x15,0x11,0x11,0x11,0x00}, {0x11,0x19,0x15,0x13,0x11,0x11,0x00}, 
-    {0x0E,0x11,0x11,0x11,0x11,0x0E,0x00}, {0x1E,0x11,0x11,0x1E,0x10,0x10,0x00}, 
-    {0x0E,0x11,0x11,0x15,0x12,0x0D,0x00}, {0x1E,0x11,0x11,0x1E,0x14,0x13,0x00}, 
-    {0x0F,0x10,0x10,0x0E,0x01,0x1E,0x00}, {0x1F,0x04,0x04,0x04,0x04,0x04,0x00}, 
-    {0x11,0x11,0x11,0x11,0x11,0x0E,0x00}, {0x11,0x11,0x11,0x11,0x0A,0x04,0x00}, 
-    {0x11,0x11,0x15,0x15,0x1B,0x11,0x00}, {0x11,0x0A,0x04,0x04,0x0A,0x11,0x00}, 
-    {0x11,0x11,0x0A,0x04,0x04,0x04,0x00}, {0x1F,0x02,0x04,0x08,0x10,0x1F,0x00}
-};
+    {0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x00},
+    {0x1E, 0x11, 0x11, 0x1E, 0x11, 0x1E, 0x00},
+    {0x0E, 0x11, 0x10, 0x10, 0x11, 0x0E, 0x00},
+    {0x1E, 0x11, 0x11, 0x11, 0x11, 0x1E, 0x00},
+    {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x1F, 0x00},
+    {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x00},
+    {0x0E, 0x11, 0x10, 0x17, 0x11, 0x0F, 0x00},
+    {0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x00},
+    {0x0E, 0x04, 0x04, 0x04, 0x04, 0x0E, 0x00},
+    {0x07, 0x02, 0x02, 0x02, 0x12, 0x0C, 0x00},
+    {0x11, 0x12, 0x14, 0x18, 0x14, 0x13, 0x00},
+    {0x10, 0x10, 0x10, 0x10, 0x10, 0x1F, 0x00},
+    {0x11, 0x1B, 0x15, 0x11, 0x11, 0x11, 0x00},
+    {0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x00},
+    {0x0E, 0x11, 0x11, 0x11, 0x11, 0x0E, 0x00},
+    {0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x00},
+    {0x0E, 0x11, 0x11, 0x15, 0x12, 0x0D, 0x00},
+    {0x1E, 0x11, 0x11, 0x1E, 0x14, 0x13, 0x00},
+    {0x0F, 0x10, 0x10, 0x0E, 0x01, 0x1E, 0x00},
+    {0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x00},
+    {0x11, 0x11, 0x11, 0x11, 0x11, 0x0E, 0x00},
+    {0x11, 0x11, 0x11, 0x11, 0x0A, 0x04, 0x00},
+    {0x11, 0x11, 0x15, 0x15, 0x1B, 0x11, 0x00},
+    {0x11, 0x0A, 0x04, 0x04, 0x0A, 0x11, 0x00},
+    {0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x00},
+    {0x1F, 0x02, 0x04, 0x08, 0x10, 0x1F, 0x00}};
 
 static const int digits[10][5] = {
-    {0b111, 0b101, 0b101, 0b101, 0b111}, // 0
-    {0b010, 0b110, 0b010, 0b010, 0b111}, // 1
-    {0b111, 0b001, 0b111, 0b100, 0b111}, // 2
-    {0b111, 0b001, 0b111, 0b001, 0b111}, // 3
-    {0b101, 0b101, 0b111, 0b001, 0b001}, // 4
-    {0b111, 0b100, 0b111, 0b001, 0b111}, // 5
-    {0b111, 0b100, 0b111, 0b101, 0b111}, // 6
-    {0b111, 0b001, 0b001, 0b001, 0b001}, // 7
-    {0b111, 0b101, 0b111, 0b101, 0b111}, // 8
-    {0b111, 0b101, 0b111, 0b001, 0b111}  // 9
+    {0b111, 0b101, 0b101, 0b101, 0b111},  // 0
+    {0b010, 0b110, 0b010, 0b010, 0b111},  // 1
+    {0b111, 0b001, 0b111, 0b100, 0b111},  // 2
+    {0b111, 0b001, 0b111, 0b001, 0b111},  // 3
+    {0b101, 0b101, 0b111, 0b001, 0b001},  // 4
+    {0b111, 0b100, 0b111, 0b001, 0b111},  // 5
+    {0b111, 0b100, 0b111, 0b101, 0b111},  // 6
+    {0b111, 0b001, 0b001, 0b001, 0b001},  // 7
+    {0b111, 0b101, 0b111, 0b101, 0b111},  // 8
+    {0b111, 0b101, 0b111, 0b001, 0b111}   // 9
 };
 
 // ==========================================
@@ -130,15 +153,16 @@ static const int digits[10][5] = {
 // ==========================================
 void plot_pixel(int x, int y, short int line_color);
 short int get_pixel(int x, int y);
-void draw_line (int x0, int y0, int x1, int y1, short int line_color);
+void draw_line(int x0, int y0, int x1, int y1, short int line_color);
 void draw_circle(int cx, int cy, int radius, short int color);
 void draw_digit(int digit, int x, int y, short int color);
 void draw_char(char ch, int x, int y, int scale, short colour);
 void draw_play_button_green();
 void draw_play_button_gray();
 void draw_skip_button();
-void fill_area (int x0, int x1, int y0, int y1, short int fill_color);
-void fill_shape(int minX, int minY, int maxX, int maxY, short int fill_color, short int edge_color);
+void fill_area(int x0, int x1, int y0, int y1, short int fill_color);
+void fill_shape(int minX, int minY, int maxX, int maxY, short int fill_color,
+                short int edge_color);
 void draw_main_screen(int recordActive, int chooseActive);
 void erase_menu();
 void update_left_menu();
@@ -149,14 +173,14 @@ void poll_mouse();
 void draw_cursor(int x, int y, short int color);
 void erase_cursor(int x, int y);
 void cache_cursor_bg(int x, int y);
-void swap (int* x, int* y);
+void swap(int* x, int* y);
 void update_audio();
 void update_hardware();
 void play_audio(const int audio_sample[], int num_of_samples);
 double find_seconds_per_bar(int bpm);
-void count_bars(int bpm, int bars, int continuous, int *stop);
+void count_bars(int bpm, int bars, int continuous, int* stop);
 void add_instrument();
-void choose_instrument(); 
+void choose_instrument();
 void choose_piano();
 void choose_snare();
 void choose_hihat();
@@ -170,276 +194,302 @@ void wait_for_vsync();
 // ==========================================
 // MAIN FUNCTION
 // ==========================================
-int main (void) {
-    volatile int * pixel_ctrl_ptr = (int *)FRAME_BASE;
-    
-    *(pixel_ctrl_ptr + 1) = (int) &Buffer1;
-    wait_for_vsync(); 
-    
-    pixel_buffer_start = (int) &Buffer1;
+int main(void) {
+  volatile int* pixel_ctrl_ptr = (int*)FRAME_BASE;
 
-    clear_screen(); 
-		
-    int recordActive = 0;
-    int chooseActive = 0;
-    int stop = 0;
-    int *stop_ptr = &stop;
+  *(pixel_ctrl_ptr + 1) = (int)&Buffer1;
+  wait_for_vsync();
 
-    AUDIO_CTRL = 0xC; 
-    AUDIO_CTRL = 0x0;
+  pixel_buffer_start = (int)&Buffer1;
 
-    for (int i = 0; i < MAX_INSTRUMENTS; i++) {
-        track_pos[i] = -1;
-    }
+  clear_screen();
 
-    sample_lengths[3] = hihat_samples_n;
-    sample_lengths[4] = snare_samples_n;
-    sample_lengths[5] = bass_samples_n;
+  int recordActive = 0;
+  int chooseActive = 0;
+  int stop = 0;
+  int* stop_ptr = &stop;
 
-    draw_main_screen(recordActive, chooseActive);
-    
-    init_mouse();
-    
-    cache_cursor_bg(mouseX, mouseY);
-    draw_cursor(mouseX, mouseY, 0xFFFF);
+  AUDIO_CTRL = 0xC;
+  AUDIO_CTRL = 0x0;
 
-    int prevMouseX = 160, prevMouseY = 120; 
+  sample_pointers[0] = NULL;
+  sample_pointers[1] = piano_samples;
+  sample_pointers[2] = vocal_samples;
+  sample_pointers[3] = hihat_samples;
+  sample_pointers[4] = snare_samples;
+  sample_pointers[5] = bass_samples;
 
-    while (1) {
-        
-        // 1. Process edge-detected clicks from the hardware poller
-        if (global_clicked) {
-            int cx = global_clickX;
-            int cy = global_clickY;
-            global_clicked = 0;
+  for (int i = 0; i < MAX_INSTRUMENTS; i++) {
+    track_pos[i] = -1;
+  }
 
-            if (chooseActive) {
-                int selected = 0;
-                if (cx > 108 && cx < 158 && cy > 74 && cy < 123) {
-                    choose_piano(); selected = 1;
-                } else if (cx > 161 && cx < 211 && cy > 74 && cy < 123) {
-                    choose_vocal(); selected = 1;
-                } else if (cx > 82 && cx < 132 && cy > 129 && cy < 178) {
-                    choose_hihat(); selected = 1;
-                } else if (cx > 135 && cx < 185 && cy > 129 && cy < 178) {
-                    choose_snare(); selected = 1;
-                } else if (cx > 188 && cx < 238 && cy > 129 && cy < 178) {
-                    choose_bass(); selected = 1;
-                } else if (cx > 0 && cx < 21 && cy > new_instrument_location_y1 && cy < new_instrument_location_y2) {	
-                    selected = 1;
-                }
-                
-                if (selected) {
-                    chooseActive = 0;
-                    erase_cursor(mouseX, mouseY);
-                    erase_menu();
-                    update_left_menu();
-                    cache_cursor_bg(mouseX, mouseY);
-                    draw_cursor(mouseX, mouseY, 0xFFFF);
-                }
-            } else {
-                if (cx > 149 && cx < 169 && cy > 5 && cy < 16) {
-                    // Toggle play — do NOT reset tick or sample_counter so resume works correctly
-                    playActive = !playActive;
-                    erase_cursor(mouseX, mouseY);
-                    if (playActive) draw_play_button_green();
-                    else draw_play_button_gray();
-                    cache_cursor_bg(mouseX, mouseY);
-                    draw_cursor(mouseX, mouseY, 0xFFFF);
-                    
-                } else if (cx > 169 && cx < 184 && cy > 5 && cy < 16) {
-                    recordActive = !recordActive;
-                    erase_cursor(mouseX, mouseY);
-                    if (recordActive) {
-                        fill_area(170, 184, 5, 16, 0xFC10); 
-                    } else {
-                        fill_area(170, 184, 5, 16, 0x2104);
-                    }
-                    draw_circle(177, 10, 3, 0xF800);
-                    fill_shape(177 - 3, 10 - 3, 177 + 3, 10 + 3, 0xF800, 0xF800);
-                    cache_cursor_bg(mouseX, mouseY);
-                    draw_cursor(mouseX, mouseY, 0xFFFF);
-                    
-                    if (recordActive) {
-                        play_audio(metronome_sample, METRONOME_NUM_SAMPLES);
-                        count_bars(beats_per_minute, 12, 0, stop_ptr);
-                        
-                        recordActive = 0;
-                        erase_cursor(mouseX, mouseY);
-                        fill_area(170, 184, 5, 16, 0x2104); 
-                        draw_circle(177, 10, 3, 0xF800);
-                        fill_shape(177 - 3, 10 - 3, 177 + 3, 10 + 3, 0xF800, 0xF800);
-                        cache_cursor_bg(mouseX, mouseY);
-                        draw_cursor(mouseX, mouseY, 0xFFFF);
-                    }
-                    
-                } else if (cx > 0 && cx < 21 && cy > new_instrument_location_y1 && cy < new_instrument_location_y2) {	
-                    chooseActive = 1;
-                    erase_cursor(mouseX, mouseY);
-                    choose_instrument();
-                    cache_cursor_bg(mouseX, mouseY);
-                    draw_cursor(mouseX, mouseY, 0xFFFF);
-                    
-                } else if (cx > 21 && cx < 319 && cy > 29) {
-                    int row = (cy - 30) / 20;
+  sample_lengths[3] = hihat_samples_n;
+  sample_lengths[4] = snare_samples_n;
+  sample_lengths[5] = bass_samples_n;
 
-                    if (row < MAX_INSTRUMENTS && row < instrument_count && instrument_types[row] > 2) {
-                        int col = -1;
-                        for (int i = 0; i < NUM_STEPS; i++) {
-                            if (cx >= step_x_bounds[i] && cx < step_x_bounds[i+1]) {
-                                col = i; break;
-                            }
-                        }
+  draw_main_screen(recordActive, chooseActive);
 
-                        if (col != -1) {
-                            sequencer_grid[row][col] = !sequencer_grid[row][col];
-                            
-                            int x_start = step_x_bounds[col] + 1;
-                            int x_end   = step_x_bounds[col + 1] - 1;
-                            int y_start = 30 + (row * 20); 
-                            int y_end   = y_start + 18; 
-                            
-                            if (y_end < 240) {
-                                erase_cursor(mouseX, mouseY);
-                                
-                                if (sequencer_grid[row][col] == 1) {
-                                    fill_area(x_start, x_end, y_start, y_end, 0x07E0); 
-                                    track_pos[row] = 0; 
-                                } else {
-                                    fill_area(x_start, x_end, y_start, y_end, 0x0841); 
-                                }
-                                cache_cursor_bg(mouseX, mouseY);
-                                draw_cursor(mouseX, mouseY, 0xFFFF);
-                            }
-                        }
-                    }
-                }
-            }
+  init_mouse();
+
+  cache_cursor_bg(mouseX, mouseY);
+  draw_cursor(mouseX, mouseY, 0xFFFF);
+
+  int prevMouseX = 160, prevMouseY = 120;
+
+  while (1) {
+    // 1. Process edge-detected clicks from the hardware poller
+    if (global_clicked) {
+      int cx = global_clickX;
+      int cy = global_clickY;
+      global_clicked = 0;
+
+      if (chooseActive) {
+        int selected = 0;
+        if (cx > 108 && cx < 158 && cy > 74 && cy < 123) {
+          choose_piano();
+          selected = 1;
+        } else if (cx > 161 && cx < 211 && cy > 74 && cy < 123) {
+          choose_vocal();
+          selected = 1;
+        } else if (cx > 82 && cx < 132 && cy > 129 && cy < 178) {
+          choose_hihat();
+          selected = 1;
+        } else if (cx > 135 && cx < 185 && cy > 129 && cy < 178) {
+          choose_snare();
+          selected = 1;
+        } else if (cx > 188 && cx < 238 && cy > 129 && cy < 178) {
+          choose_bass();
+          selected = 1;
+        } else if (cx > 0 && cx < 21 && cy > new_instrument_location_y1 &&
+                   cy < new_instrument_location_y2) {
+          selected = 1;
         }
-        
-        // 2. Mouse Cursor Delta Rendering
-        if (mouseX != prevMouseX || mouseY != prevMouseY) {
-            erase_cursor(prevMouseX, prevMouseY);
+
+        if (selected) {
+          chooseActive = 0;
+          erase_cursor(mouseX, mouseY);
+          erase_menu();
+          update_left_menu();
+          cache_cursor_bg(mouseX, mouseY);
+          draw_cursor(mouseX, mouseY, 0xFFFF);
+        }
+      } else {
+        if (cx > 149 && cx < 169 && cy > 5 && cy < 16) {
+          // Toggle play — do NOT reset tick or sample_counter so resume works
+          // correctly
+          playActive = !playActive;
+          erase_cursor(mouseX, mouseY);
+          if (playActive)
+            draw_play_button_green();
+          else
+            draw_play_button_gray();
+          cache_cursor_bg(mouseX, mouseY);
+          draw_cursor(mouseX, mouseY, 0xFFFF);
+
+        } else if (cx > 169 && cx < 184 && cy > 5 && cy < 16) {
+          recordActive = !recordActive;
+          erase_cursor(mouseX, mouseY);
+          if (recordActive) {
+            fill_area(170, 184, 5, 16, 0xFC10);
+          } else {
+            fill_area(170, 184, 5, 16, 0x2104);
+          }
+          draw_circle(177, 10, 3, 0xF800);
+          fill_shape(177 - 3, 10 - 3, 177 + 3, 10 + 3, 0xF800, 0xF800);
+          cache_cursor_bg(mouseX, mouseY);
+          draw_cursor(mouseX, mouseY, 0xFFFF);
+
+          if (recordActive) {
+            play_audio(metronome_sample, METRONOME_NUM_SAMPLES);
+            count_bars(beats_per_minute, 12, 0, stop_ptr);
+
+            recordActive = 0;
+            erase_cursor(mouseX, mouseY);
+            fill_area(170, 184, 5, 16, 0x2104);
+            draw_circle(177, 10, 3, 0xF800);
+            fill_shape(177 - 3, 10 - 3, 177 + 3, 10 + 3, 0xF800, 0xF800);
             cache_cursor_bg(mouseX, mouseY);
             draw_cursor(mouseX, mouseY, 0xFFFF);
-            
-            prevMouseX = mouseX;
-            prevMouseY = mouseY;
-        }
+          }
 
-        // 3. Playhead Delta Rendering
-        if (last_drawn_tick != current_tick) {
-            int ph_x = step_x_bounds[current_tick] + (step_x_bounds[current_tick + 1] - step_x_bounds[current_tick]) / 2;
-            int cursor_near = (mouseX >= ph_x - 2 && mouseX <= ph_x + 2 && mouseY >= 29 && mouseY <= 239);
+        } else if (cx > 0 && cx < 21 && cy > new_instrument_location_y1 &&
+                   cy < new_instrument_location_y2) {
+          chooseActive = 1;
+          erase_cursor(mouseX, mouseY);
+          choose_instrument();
+          cache_cursor_bg(mouseX, mouseY);
+          draw_cursor(mouseX, mouseY, 0xFFFF);
 
-            if (cursor_near) erase_cursor(mouseX, mouseY);
-            if (last_drawn_tick >= 0) erase_playhead(last_drawn_tick);
-            if (playActive) draw_playhead(current_tick, 0xFFFF);
-            last_drawn_tick = current_tick;
-            if (cursor_near) {
+        } else if (cx > 21 && cx < 319 && cy > 29) {
+          int row = (cy - 30) / 20;
+
+          if (row < MAX_INSTRUMENTS && row < instrument_count &&
+              instrument_types[row] > 2) {
+            int col = -1;
+            for (int i = 0; i < NUM_STEPS; i++) {
+              if (cx >= step_x_bounds[i] && cx < step_x_bounds[i + 1]) {
+                col = i;
+                break;
+              }
+            }
+
+            if (col != -1) {
+              sequencer_grid[row][col] = !sequencer_grid[row][col];
+
+              int x_start = step_x_bounds[col] + 1;
+              int x_end = step_x_bounds[col + 1] - 1;
+              int y_start = 30 + (row * 20);
+              int y_end = y_start + 18;
+
+              if (y_end < 240) {
+                erase_cursor(mouseX, mouseY);
+
+                if (sequencer_grid[row][col] == 1) {
+                  fill_area(x_start, x_end, y_start, y_end, 0x07E0);
+                  track_pos[row] = 0;
+                } else {
+                  fill_area(x_start, x_end, y_start, y_end, 0x0841);
+                }
                 cache_cursor_bg(mouseX, mouseY);
                 draw_cursor(mouseX, mouseY, 0xFFFF);
+              }
             }
+          }
         }
-
-        // 4. Continuously run the hardware 
-        update_hardware();
+      }
     }
+
+    // 2. Mouse Cursor Delta Rendering
+    if (mouseX != prevMouseX || mouseY != prevMouseY) {
+      erase_cursor(prevMouseX, prevMouseY);
+      cache_cursor_bg(mouseX, mouseY);
+      draw_cursor(mouseX, mouseY, 0xFFFF);
+
+      prevMouseX = mouseX;
+      prevMouseY = mouseY;
+    }
+
+    // 3. Playhead Delta Rendering
+    if (last_drawn_tick != current_tick) {
+      int ph_x =
+          step_x_bounds[current_tick] +
+          (step_x_bounds[current_tick + 1] - step_x_bounds[current_tick]) / 2;
+      int cursor_near = (mouseX >= ph_x - 2 && mouseX <= ph_x + 2 &&
+                         mouseY >= 29 && mouseY <= 239);
+
+      if (cursor_near) erase_cursor(mouseX, mouseY);
+      if (last_drawn_tick >= 0) erase_playhead(last_drawn_tick);
+      if (playActive) draw_playhead(current_tick, 0xFFFF);
+      last_drawn_tick = current_tick;
+      if (cursor_near) {
+        cache_cursor_bg(mouseX, mouseY);
+        draw_cursor(mouseX, mouseY, 0xFFFF);
+      }
+    }
+
+    // 4. Continuously run the hardware
+    update_hardware();
+  }
 }
 
 // ==========================================
 // Hardware Synchronization Functions
 // ==========================================
 void update_hardware() {
-    update_audio();
-    poll_mouse();
+  update_audio();
+  poll_mouse();
 }
 
 void update_audio() {
-    int left_space = (AUDIO_FIFOSPACE >> 24) & 0xFF;
-    int right_space = (AUDIO_FIFOSPACE >> 16) & 0xFF;
-    int space = (left_space < right_space) ? left_space : right_space;
-    
-    while (space > 0) {
-        long long mixed_sample = 0; 
+  int left_space = (AUDIO_FIFOSPACE >> 24) & 0xFF;
+  int right_space = (AUDIO_FIFOSPACE >> 16) & 0xFF;
+  int space = (left_space < right_space) ? left_space : right_space;
 
-        for (int i = 0; i < instrument_count; i++) {
-            int type = instrument_types[i];
+  while (space > 0) {
+    long long mixed_sample = 0;
 
-            if (track_pos[i] != -1 && sample_lengths[type] > 0) {
-                mixed_sample += (sample_pointers[type][track_pos[i]] * VOLUME_MULTIPLIER); 
-                track_pos[i]++;
-                
-                if (track_pos[i] >= sample_lengths[type]) track_pos[i] = -1; 
-            }
-        }
+    for (int i = 0; i < instrument_count; i++) {
+      int type = instrument_types[i];
 
-        if (mixed_sample > 2147483647LL) mixed_sample = 2147483647LL;
-        if (mixed_sample < -2147483648LL) mixed_sample = -2147483648LL;
+      if (track_pos[i] != -1 && sample_lengths[type] > 0) {
+        mixed_sample +=
+            (sample_pointers[type][track_pos[i]] * VOLUME_MULTIPLIER);
+        track_pos[i]++;
 
-        AUDIO_LEFT = (int)mixed_sample;
-        AUDIO_RIGHT = (int)mixed_sample;
-        
-        space--;
-
-        if (playActive) {
-            sample_counter++;
-            int samples_per_step = 120000 / beats_per_minute;
-            
-            if (sample_counter >= samples_per_step) { 
-                sample_counter = 0;
-                current_tick = (current_tick + 1) % NUM_STEPS;
-                for (int i = 0; i < instrument_count; i++) {
-                    if (sequencer_grid[i][current_tick]) track_pos[i] = 0;
-                }
-            }
-        }
+        if (track_pos[i] >= sample_lengths[type]) track_pos[i] = -1;
+      }
     }
+
+    if (mixed_sample > 2147483647LL) mixed_sample = 2147483647LL;
+    if (mixed_sample < -2147483648LL) mixed_sample = -2147483648LL;
+
+    AUDIO_LEFT = (int)mixed_sample;
+    AUDIO_RIGHT = (int)mixed_sample;
+
+    space--;
+
+    if (playActive) {
+      sample_counter++;
+      int samples_per_step = 120000 / beats_per_minute;
+
+      if (sample_counter >= samples_per_step) {
+        sample_counter = 0;
+        current_tick = (current_tick + 1) % NUM_STEPS;
+        for (int i = 0; i < instrument_count; i++) {
+          if (sequencer_grid[i][current_tick]) track_pos[i] = 0;
+        }
+      }
+    }
+  }
 }
 
 void poll_mouse() {
-    volatile int *ps2_ptr = (int *)PS2_BASE;
-    int data;
-    static int prev_btn = 0;
-    
-    while (1) {
-        data = *ps2_ptr;
-        if ((data & 0x8000) == 0) return;  
+  volatile int* ps2_ptr = (int*)PS2_BASE;
+  int data;
+  static int prev_btn = 0;
 
-        int byte1 = data & 0xFF;
-        if(!(byte1 & 0x08)) continue;
+  while (1) {
+    data = *ps2_ptr;
+    if ((data & 0x8000) == 0) return;
 
-        do { data = *ps2_ptr; } while ((data & 0x8000) == 0);
-        int byte2 = data & 0xFF;
+    int byte1 = data & 0xFF;
+    if (!(byte1 & 0x08)) continue;
 
-        do { data = *ps2_ptr; } while ((data & 0x8000) == 0);
-        int byte3 = data & 0xFF;
+    do {
+      data = *ps2_ptr;
+    } while ((data & 0x8000) == 0);
+    int byte2 = data & 0xFF;
 
-        int dx = (int)(signed char)byte2;
-        int dy = (int)(signed char)byte3;
+    do {
+      data = *ps2_ptr;
+    } while ((data & 0x8000) == 0);
+    int byte3 = data & 0xFF;
 
-        if (byte1 & 0x40) dx = 0;
-        if (byte1 & 0x80) dy = 0;
+    int dx = (int)(signed char)byte2;
+    int dy = (int)(signed char)byte3;
 
-        dx = dx / 5;
-        dy = dy / 5;
+    if (byte1 & 0x40) dx = 0;
+    if (byte1 & 0x80) dy = 0;
 
-        mouseX += dx;
-        mouseY -= dy;
+    dx = dx / 5;
+    dy = dy / 5;
 
-        if (mouseX < 0)   mouseX = 0;
-        if (mouseX > 319) mouseX = 319;
-        if (mouseY < 0)   mouseY = 0;
-        if (mouseY > 239) mouseY = 239;
+    mouseX += dx;
+    mouseY -= dy;
 
-        int current_btn = byte1 & 0x01;
-        if (current_btn && !prev_btn) {
-            global_clicked = 1;
-            global_clickX = mouseX;
-            global_clickY = mouseY;
-        }
-        prev_btn = current_btn;
+    if (mouseX < 0) mouseX = 0;
+    if (mouseX > 319) mouseX = 319;
+    if (mouseY < 0) mouseY = 0;
+    if (mouseY > 239) mouseY = 239;
+
+    int current_btn = byte1 & 0x01;
+    if (current_btn && !prev_btn) {
+      global_clicked = 1;
+      global_clickX = mouseX;
+      global_clickY = mouseY;
     }
+    prev_btn = current_btn;
+  }
 }
 
 // ==========================================
@@ -448,474 +498,602 @@ void poll_mouse() {
 
 // Draws a white vertical line through the centre of the given step column
 void draw_playhead(int tick, short int color) {
-    int x = step_x_bounds[tick] + (step_x_bounds[tick + 1] - step_x_bounds[tick]) / 2;
-    for (int y = 29; y < 240; y++) {
-        plot_pixel(x, y, color);
-    }
+  int x =
+      step_x_bounds[tick] + (step_x_bounds[tick + 1] - step_x_bounds[tick]) / 2;
+  for (int y = 29; y < 240; y++) {
+    plot_pixel(x, y, color);
+  }
 }
 
 // Erases the playhead by restoring each pixel to its correct background color.
 // Starts from y=30 to avoid the off-by-one at the grid boundary.
 void erase_playhead(int tick) {
-    int x = step_x_bounds[tick] + (step_x_bounds[tick + 1] - step_x_bounds[tick]) / 2;
-    for (int y = 29; y < 240; y++) {
-        short int restore_color = 0x0841;
-        if (y >= 30) {
-            int row = (y - 30) / 20;
-            if (row >= 0 && row < instrument_count && sequencer_grid[row][tick] == 1) {
-                restore_color = 0x07E0;
-            }
-        }
-        plot_pixel(x, y, restore_color);
+  int x =
+      step_x_bounds[tick] + (step_x_bounds[tick + 1] - step_x_bounds[tick]) / 2;
+  for (int y = 29; y < 240; y++) {
+    short int restore_color = 0x0841;
+    if (y >= 30) {
+      int row = (y - 30) / 20;
+      if (row >= 0 && row < instrument_count &&
+          sequencer_grid[row][tick] == 1) {
+        restore_color = 0x07E0;
+      }
     }
+    plot_pixel(x, y, restore_color);
+  }
 }
 
 // ==========================================
 // Drawing Functions
 // ==========================================
 void cache_cursor_bg(int x, int y) {
-    if (x + 1 < 320 && y < 240 && x - 1 >= 0 && y - 1 >= 0) {
-        cursor_bg[0] = get_pixel(x, y);
-        cursor_bg[1] = get_pixel(x + 1, y);
-        cursor_bg[2] = get_pixel(x - 1, y);
-        cursor_bg[3] = get_pixel(x, y + 1);
-        cursor_bg[4] = get_pixel(x, y - 1);
-    }
+  if (x + 1 < 320 && y < 240 && x - 1 >= 0 && y - 1 >= 0) {
+    cursor_bg[0] = get_pixel(x, y);
+    cursor_bg[1] = get_pixel(x + 1, y);
+    cursor_bg[2] = get_pixel(x - 1, y);
+    cursor_bg[3] = get_pixel(x, y + 1);
+    cursor_bg[4] = get_pixel(x, y - 1);
+  }
 }
 
 void erase_cursor(int x, int y) {
-    if (x + 1 < 320 && y < 240 && x - 1 >= 0 && y - 1 >= 0) {
-        plot_pixel(x, y, cursor_bg[0]);
-        plot_pixel(x + 1, y, cursor_bg[1]);
-        plot_pixel(x - 1, y, cursor_bg[2]);
-        plot_pixel(x, y + 1, cursor_bg[3]);
-        plot_pixel(x, y - 1, cursor_bg[4]);
-    }
+  if (x + 1 < 320 && y < 240 && x - 1 >= 0 && y - 1 >= 0) {
+    plot_pixel(x, y, cursor_bg[0]);
+    plot_pixel(x + 1, y, cursor_bg[1]);
+    plot_pixel(x - 1, y, cursor_bg[2]);
+    plot_pixel(x, y + 1, cursor_bg[3]);
+    plot_pixel(x, y - 1, cursor_bg[4]);
+  }
 }
 
 void draw_cursor(int x, int y, short int color) {
-	if (x + 1 < 320 && y < 240 && x - 1 >= 0 && y - 1 >= 0) {
-	    plot_pixel(x, y, color);
-		plot_pixel(x + 1, y, color);
-		plot_pixel(x - 1, y, color);
-		plot_pixel(x, y + 1, color);
-		plot_pixel(x, y - 1, color);
-	}
+  if (x + 1 < 320 && y < 240 && x - 1 >= 0 && y - 1 >= 0) {
+    plot_pixel(x, y, color);
+    plot_pixel(x + 1, y, color);
+    plot_pixel(x - 1, y, color);
+    plot_pixel(x, y + 1, color);
+    plot_pixel(x, y - 1, color);
+  }
 }
 
 void erase_menu() {
-    fill_area(70, 250, 50, 190, 0x0841);
+  fill_area(70, 250, 50, 190, 0x0841);
 
-    int major_lines[] = {96, 133, 170, 207, 244};
-    for (int i=0; i<5; i++) draw_line(major_lines[i], 50, major_lines[i], 190, 0x2104);
+  int major_lines[] = {96, 133, 170, 207, 244};
+  for (int i = 0; i < 5; i++)
+    draw_line(major_lines[i], 50, major_lines[i], 190, 0x2104);
 
-    int minor_lines[] = {77, 86, 105, 114, 123, 142, 151, 160, 179, 188, 197, 216, 225, 234};
-    for (int i=0; i<14; i++) draw_line(minor_lines[i], 50, minor_lines[i], 190, 0x1082);
+  int minor_lines[] = {77,  86,  105, 114, 123, 142, 151,
+                       160, 179, 188, 197, 216, 225, 234};
+  for (int i = 0; i < 14; i++)
+    draw_line(minor_lines[i], 50, minor_lines[i], 190, 0x1082);
 
-    for (int row = 0; row < instrument_count; row++) {
-        for (int col = 0; col < NUM_STEPS; col++) {
-            if (sequencer_grid[row][col] == 1) {
-                int x_start = step_x_bounds[col] + 1;
-                int x_end   = step_x_bounds[col + 1] - 1;
-                int y_start = 30 + (row * 20); 
-                int y_end   = y_start + 18; 
-                if (x_end >= 70 && x_start <= 250 && y_end >= 50 && y_start <= 190) {
-                    fill_area(x_start, x_end, y_start, y_end, 0x07E0); 
-                }
-            }
+  for (int row = 0; row < instrument_count; row++) {
+    for (int col = 0; col < NUM_STEPS; col++) {
+      if (sequencer_grid[row][col] == 1) {
+        int x_start = step_x_bounds[col] + 1;
+        int x_end = step_x_bounds[col + 1] - 1;
+        int y_start = 30 + (row * 20);
+        int y_end = y_start + 18;
+        if (x_end >= 70 && x_start <= 250 && y_end >= 50 && y_start <= 190) {
+          fill_area(x_start, x_end, y_start, y_end, 0x07E0);
         }
+      }
     }
+  }
 }
 
 void update_left_menu() {
-    fill_area(0, 20, 21, 239, 0x39E7);
-    draw_line(21, 21, 21, 239, 0x2104);
-    
-    draw_line(0, new_instrument_location_y1, 21, new_instrument_location_y1, 0x2104);
-    draw_line(0, new_instrument_location_y2, 21, new_instrument_location_y2, 0x2104);
-    for (int i = 0; i < instrument_count; i++) {
-        draw_line(0, instrument_separator_positions[i], 21, instrument_separator_positions[i], 0x2104);
-        draw_instrument_label(instrument_types[i], instrument_label_positions[i]);
-    }
-    
-    draw_line(7, add_instrument_plus_y0, 14, add_instrument_plus_y0, 0xBDF7); 
-    draw_line(10, add_instrument_plus_y1, 10, add_instrument_plus_y2, 0xBDF7); 
+  fill_area(0, 20, 21, 239, 0x39E7);
+  draw_line(21, 21, 21, 239, 0x2104);
+
+  draw_line(0, new_instrument_location_y1, 21, new_instrument_location_y1,
+            0x2104);
+  draw_line(0, new_instrument_location_y2, 21, new_instrument_location_y2,
+            0x2104);
+  for (int i = 0; i < instrument_count; i++) {
+    draw_line(0, instrument_separator_positions[i], 21,
+              instrument_separator_positions[i], 0x2104);
+    draw_instrument_label(instrument_types[i], instrument_label_positions[i]);
+  }
+
+  draw_line(7, add_instrument_plus_y0, 14, add_instrument_plus_y0, 0xBDF7);
+  draw_line(10, add_instrument_plus_y1, 10, add_instrument_plus_y2, 0xBDF7);
 }
 
 void add_instrument() {
-	if ((new_instrument_location_y2 + 20) > 240) return;
-	int temp = new_instrument_location_y2;
-	new_instrument_location_y2 += 20;
-	new_instrument_location_y1 = temp;
-	add_instrument_plus_y0 = new_instrument_location_y1 + 10;
-	add_instrument_plus_y1 = new_instrument_location_y1 + 7; 
-	add_instrument_plus_y2 = new_instrument_location_y1 + 14;
+  if ((new_instrument_location_y2 + 20) > 240) return;
+  int temp = new_instrument_location_y2;
+  new_instrument_location_y2 += 20;
+  new_instrument_location_y1 = temp;
+  add_instrument_plus_y0 = new_instrument_location_y1 + 10;
+  add_instrument_plus_y1 = new_instrument_location_y1 + 7;
+  add_instrument_plus_y2 = new_instrument_location_y1 + 14;
 }
-					
+
 void choose_instrument() {
-	fill_area(70, 250, 50, 190, 0x1082);
-	fill_area(76, 244, 68, 184, 0x2104);
-	draw_char('C', 113, 56, 1, 0xFFFF); draw_char('H', 119, 56, 1, 0xFFFF);
-	draw_char('O', 125, 56, 1, 0xFFFF); draw_char('O', 131, 56, 1, 0xFFFF);
-	draw_char('S', 137, 56, 1, 0xFFFF); draw_char('E', 143, 56, 1, 0xFFFF);
-	draw_char('I', 153, 56, 1, 0xFFFF); draw_char('N', 159, 56, 1, 0xFFFF);
-	draw_char('S', 165, 56, 1, 0xFFFF); draw_char('T', 171, 56, 1, 0xFFFF);
-	draw_char('R', 177, 56, 1, 0xFFFF); draw_char('U', 183, 56, 1, 0xFFFF);
-	draw_char('M', 189, 56, 1, 0xFFFF); draw_char('E', 195, 56, 1, 0xFFFF);
-	draw_char('N', 201, 56, 1, 0xFFFF); draw_char('T', 207, 56, 1, 0xFFFF);
-	fill_area(108, 158, 74, 123, 0x1082); fill_area(110, 156, 76, 105, 0x2104);
-	draw_char('P', 119, 112, 1, 0xFFFF); draw_char('I', 125, 112, 1, 0xFFFF);
-	draw_char('A', 131, 112, 1, 0xFFFF); draw_char('N', 137, 112, 1, 0xFFFF);
-	draw_char('O', 143, 112, 1, 0xFFFF);
-	fill_area(161, 211, 74, 123, 0x1082); fill_area(163, 209, 76, 105, 0x2104);
-	draw_char('V', 172, 112, 1, 0xFFFF); draw_char('O', 178, 112, 1, 0xFFFF);
-	draw_char('C', 184, 112, 1, 0xFFFF); draw_char('A', 190, 112, 1, 0xFFFF);
-	draw_char('L', 196, 112, 1, 0xFFFF);
-	fill_area(82, 132, 129, 178, 0x1082); fill_area(84, 130, 131, 160, 0x2104);
-	draw_char('H', 93, 167, 1, 0xFFFF);  draw_char('I', 99, 167, 1, 0xFFFF);
-	draw_char('H', 105, 167, 1, 0xFFFF); draw_char('A', 111, 167, 1, 0xFFFF);
-	draw_char('T', 117, 167, 1, 0xFFFF);
-	fill_area(135, 185, 129, 178, 0x1082); fill_area(137, 183, 131, 160, 0x2104);
-	draw_char('S', 146, 167, 1, 0xFFFF); draw_char('N', 152, 167, 1, 0xFFFF);
-	draw_char('A', 158, 167, 1, 0xFFFF); draw_char('R', 164, 167, 1, 0xFFFF);
-	draw_char('E', 170, 167, 1, 0xFFFF);
-	fill_area(188, 238, 129, 178, 0x1082); fill_area(190, 236, 131, 160, 0x2104);
-	draw_char('B', 202, 167, 1, 0xFFFF); draw_char('A', 208, 167, 1, 0xFFFF);
-	draw_char('S', 214, 167, 1, 0xFFFF); draw_char('S', 220, 167, 1, 0xFFFF);
+  fill_area(70, 250, 50, 190, 0x1082);
+  fill_area(76, 244, 68, 184, 0x2104);
+  draw_char('C', 113, 56, 1, 0xFFFF);
+  draw_char('H', 119, 56, 1, 0xFFFF);
+  draw_char('O', 125, 56, 1, 0xFFFF);
+  draw_char('O', 131, 56, 1, 0xFFFF);
+  draw_char('S', 137, 56, 1, 0xFFFF);
+  draw_char('E', 143, 56, 1, 0xFFFF);
+  draw_char('I', 153, 56, 1, 0xFFFF);
+  draw_char('N', 159, 56, 1, 0xFFFF);
+  draw_char('S', 165, 56, 1, 0xFFFF);
+  draw_char('T', 171, 56, 1, 0xFFFF);
+  draw_char('R', 177, 56, 1, 0xFFFF);
+  draw_char('U', 183, 56, 1, 0xFFFF);
+  draw_char('M', 189, 56, 1, 0xFFFF);
+  draw_char('E', 195, 56, 1, 0xFFFF);
+  draw_char('N', 201, 56, 1, 0xFFFF);
+  draw_char('T', 207, 56, 1, 0xFFFF);
+  fill_area(108, 158, 74, 123, 0x1082);
+  fill_area(110, 156, 76, 105, 0x2104);
+  draw_char('P', 119, 112, 1, 0xFFFF);
+  draw_char('I', 125, 112, 1, 0xFFFF);
+  draw_char('A', 131, 112, 1, 0xFFFF);
+  draw_char('N', 137, 112, 1, 0xFFFF);
+  draw_char('O', 143, 112, 1, 0xFFFF);
+  fill_area(161, 211, 74, 123, 0x1082);
+  fill_area(163, 209, 76, 105, 0x2104);
+  draw_char('V', 172, 112, 1, 0xFFFF);
+  draw_char('O', 178, 112, 1, 0xFFFF);
+  draw_char('C', 184, 112, 1, 0xFFFF);
+  draw_char('A', 190, 112, 1, 0xFFFF);
+  draw_char('L', 196, 112, 1, 0xFFFF);
+  fill_area(82, 132, 129, 178, 0x1082);
+  fill_area(84, 130, 131, 160, 0x2104);
+  draw_char('H', 93, 167, 1, 0xFFFF);
+  draw_char('I', 99, 167, 1, 0xFFFF);
+  draw_char('H', 105, 167, 1, 0xFFFF);
+  draw_char('A', 111, 167, 1, 0xFFFF);
+  draw_char('T', 117, 167, 1, 0xFFFF);
+  fill_area(135, 185, 129, 178, 0x1082);
+  fill_area(137, 183, 131, 160, 0x2104);
+  draw_char('S', 146, 167, 1, 0xFFFF);
+  draw_char('N', 152, 167, 1, 0xFFFF);
+  draw_char('A', 158, 167, 1, 0xFFFF);
+  draw_char('R', 164, 167, 1, 0xFFFF);
+  draw_char('E', 170, 167, 1, 0xFFFF);
+  fill_area(188, 238, 129, 178, 0x1082);
+  fill_area(190, 236, 131, 160, 0x2104);
+  draw_char('B', 202, 167, 1, 0xFFFF);
+  draw_char('A', 208, 167, 1, 0xFFFF);
+  draw_char('S', 214, 167, 1, 0xFFFF);
+  draw_char('S', 220, 167, 1, 0xFFFF);
 }
 
 void choose_piano() {
-    add_instrument();
-    if (instrument_count < MAX_INSTRUMENTS) { 
-        instrument_types[instrument_count] = 1; 
-        instrument_separator_positions[instrument_count] = new_instrument_location_y1 - 20;
-        instrument_label_positions[instrument_count] = new_instrument_location_y1 - 12;
-        instrument_count++;
-    }
+  add_instrument();
+  if (instrument_count < MAX_INSTRUMENTS) {
+    instrument_types[instrument_count] = 1;
+    instrument_separator_positions[instrument_count] =
+        new_instrument_location_y1 - 20;
+    instrument_label_positions[instrument_count] =
+        new_instrument_location_y1 - 12;
+    instrument_count++;
+  }
 }
 
 void choose_vocal() {
-    add_instrument();
-    if (instrument_count < MAX_INSTRUMENTS) { 
-        instrument_types[instrument_count] = 2; 
-        instrument_separator_positions[instrument_count] = new_instrument_location_y1 - 20;
-        instrument_label_positions[instrument_count] = new_instrument_location_y1 - 12;
-        instrument_count++;
-    }
+  add_instrument();
+  if (instrument_count < MAX_INSTRUMENTS) {
+    instrument_types[instrument_count] = 2;
+    instrument_separator_positions[instrument_count] =
+        new_instrument_location_y1 - 20;
+    instrument_label_positions[instrument_count] =
+        new_instrument_location_y1 - 12;
+    instrument_count++;
+  }
 }
 
 void choose_hihat() {
-    add_instrument();
-    if (instrument_count < MAX_INSTRUMENTS) { 
-        instrument_types[instrument_count] = 3; 
-        instrument_separator_positions[instrument_count] = new_instrument_location_y1 - 20;
-        instrument_label_positions[instrument_count] = new_instrument_location_y1 - 12;
-        instrument_count++;
-    }
+  add_instrument();
+  if (instrument_count < MAX_INSTRUMENTS) {
+    instrument_types[instrument_count] = 3;
+    instrument_separator_positions[instrument_count] =
+        new_instrument_location_y1 - 20;
+    instrument_label_positions[instrument_count] =
+        new_instrument_location_y1 - 12;
+    instrument_count++;
+  }
 }
 
 void choose_snare() {
-    add_instrument();
-    if (instrument_count < MAX_INSTRUMENTS) { 
-        instrument_types[instrument_count] = 4; 
-        instrument_separator_positions[instrument_count] = new_instrument_location_y1 - 20;
-        instrument_label_positions[instrument_count] = new_instrument_location_y1 - 12;
-        instrument_count++;
-    }
+  add_instrument();
+  if (instrument_count < MAX_INSTRUMENTS) {
+    instrument_types[instrument_count] = 4;
+    instrument_separator_positions[instrument_count] =
+        new_instrument_location_y1 - 20;
+    instrument_label_positions[instrument_count] =
+        new_instrument_location_y1 - 12;
+    instrument_count++;
+  }
 }
 
-void choose_bass(){
-    add_instrument();
-    if (instrument_count < MAX_INSTRUMENTS) { 
-        instrument_types[instrument_count] = 5; 
-        instrument_separator_positions[instrument_count] = new_instrument_location_y1 - 20;
-        instrument_label_positions[instrument_count] = new_instrument_location_y1 - 12;
-        instrument_count++;
-    }
+void choose_bass() {
+  add_instrument();
+  if (instrument_count < MAX_INSTRUMENTS) {
+    instrument_types[instrument_count] = 5;
+    instrument_separator_positions[instrument_count] =
+        new_instrument_location_y1 - 20;
+    instrument_label_positions[instrument_count] =
+        new_instrument_location_y1 - 12;
+    instrument_count++;
+  }
 }
 
 void draw_instrument_label(int type, int y) {
-    char letter;
-    switch (type) {
-        case 1: letter = 'P'; break; 
-        case 2: letter = 'V'; break; 
-        case 3: letter = 'H'; break; 
-        case 4: letter = 'S'; break; 
-        case 5: letter = 'B'; break; 
-        default: return;
-    }
-    draw_char(letter, 8, y, 1, 0xFFFF);
+  char letter;
+  switch (type) {
+    case 1:
+      letter = 'P';
+      break;
+    case 2:
+      letter = 'V';
+      break;
+    case 3:
+      letter = 'H';
+      break;
+    case 4:
+      letter = 'S';
+      break;
+    case 5:
+      letter = 'B';
+      break;
+    default:
+      return;
+  }
+  draw_char(letter, 8, y, 1, 0xFFFF);
 }
 
-double find_seconds_per_bar(int bpm) { return 60.0 /bpm; }
+double find_seconds_per_bar(int bpm) { return 60.0 / bpm; }
 
-void count_bars(int bpm, int bars, int continuous, int *stop) {
-    double seconds = bars * find_seconds_per_bar(bpm);
-    unsigned int counter_start_value = (unsigned int)(TIMER_FREQ * seconds);
-    TIMER_CTRL = 0;
-    TIMER_STATUS = 0;
-    TIMER_LOW  = counter_start_value & 0xFFFF;
-    TIMER_HIGH = (counter_start_value >> 16) & 0xFFFF;
-    int begin = 0b100; 
-    if (continuous == 1) begin = 0b110; 
-    TIMER_CTRL = begin;
-    if (continuous == 1) {
-        while (*stop == 0) {
-            if ((TIMER_STATUS & 0x1) != 0) TIMER_STATUS = 0; 
-        }
-        TIMER_CTRL = 0; 
-    } else {
-        while ((TIMER_STATUS & 0x1) == 0);
-        TIMER_STATUS = 0;
+void count_bars(int bpm, int bars, int continuous, int* stop) {
+  double seconds = bars * find_seconds_per_bar(bpm);
+  unsigned int counter_start_value = (unsigned int)(TIMER_FREQ * seconds);
+  TIMER_CTRL = 0;
+  TIMER_STATUS = 0;
+  TIMER_LOW = counter_start_value & 0xFFFF;
+  TIMER_HIGH = (counter_start_value >> 16) & 0xFFFF;
+  int begin = 0b100;
+  if (continuous == 1) begin = 0b110;
+  TIMER_CTRL = begin;
+  if (continuous == 1) {
+    while (*stop == 0) {
+      if ((TIMER_STATUS & 0x1) != 0) TIMER_STATUS = 0;
     }
+    TIMER_CTRL = 0;
+  } else {
+    while ((TIMER_STATUS & 0x1) == 0);
+    TIMER_STATUS = 0;
+  }
 }
 
 void play_audio(const int audio_sample[], int num_of_samples) {
-    for (int i = 0; i < num_of_samples; i++) {
-        int space = 0;
-        while (space == 0) {
-            int left = (AUDIO_FIFOSPACE >> 24) & 0xFF;
-            int right = (AUDIO_FIFOSPACE >> 16) & 0xFF;
-            space = (left < right) ? left : right;
-        }
-        AUDIO_LEFT  = audio_sample[i] * VOLUME_MULTIPLIER;
-        AUDIO_RIGHT = audio_sample[i] * VOLUME_MULTIPLIER;
+  for (int i = 0; i < num_of_samples; i++) {
+    int space = 0;
+    while (space == 0) {
+      int left = (AUDIO_FIFOSPACE >> 24) & 0xFF;
+      int right = (AUDIO_FIFOSPACE >> 16) & 0xFF;
+      space = (left < right) ? left : right;
     }
+    AUDIO_LEFT = audio_sample[i] * VOLUME_MULTIPLIER;
+    AUDIO_RIGHT = audio_sample[i] * VOLUME_MULTIPLIER;
+  }
 }
 
-void plot_pixel(int x, int y, short int line_color){
-    volatile short int *one_pixel_address = (short int*)(pixel_buffer_start + (y << 10) + (x << 1));
-    *one_pixel_address = line_color;
+void plot_pixel(int x, int y, short int line_color) {
+  volatile short int* one_pixel_address =
+      (short int*)(pixel_buffer_start + (y << 10) + (x << 1));
+  *one_pixel_address = line_color;
 }
 
 short int get_pixel(int x, int y) {
-    volatile short int *one_pixel_address = (short int*)(pixel_buffer_start + (y << 10) + (x << 1));
-    return *one_pixel_address; 
+  volatile short int* one_pixel_address =
+      (short int*)(pixel_buffer_start + (y << 10) + (x << 1));
+  return *one_pixel_address;
 }
 
 void draw_main_screen(int recordActive, int chooseActive) {
-	clear_screen();
-	fill_area(0, 319, 0, 20, 0x39E7);
-	fill_area(0, 20, 0, 239, 0x39E7);
-	draw_line(0, 0, 319, 0, 0x2104);
-	draw_line(0, 239, 319, 239, 0x2104);
-	draw_line(0, 0, 0, 239, 0x2104);
-	draw_line(319, 0, 319, 239, 0x2104);
-	fill_area(134, 184, 5, 15, 0x2104);
-	draw_line(149, 5, 149, 16, 0x39E7);
-	draw_line(169, 5, 169, 16, 0x39E7);
-	draw_circle(177, 10, 3, 0xF800);
-	fill_shape(177 - 3, 10 - 3, 177 + 3, 10 + 3, 0xF800, 0xF800);
-	draw_line(0, new_instrument_location_y1, 21, new_instrument_location_y1, 0x2104);
-	draw_line(0, new_instrument_location_y2, 21, new_instrument_location_y2, 0x2104);
-	for (int i = 0; i < instrument_count; i++) {
-    	draw_line(0, instrument_separator_positions[i], 21, instrument_separator_positions[i], 0x2104);
-	}
-	for (int i = 0; i < instrument_count; i++) {
-    	draw_instrument_label(instrument_types[i], instrument_label_positions[i]);
-	}
-	draw_line(7, add_instrument_plus_y0, 14, add_instrument_plus_y0, 0xBDF7); 
-	draw_line(10, add_instrument_plus_y1, 10, add_instrument_plus_y2, 0xBDF7); 
-	fill_area(21, 319, 21, 28, 0x1082);
-    
-    draw_line(21, 21, 21, 29, 0x7BEF);
-	draw_line(59, 21, 59, 29, 0x7BEF); draw_line(96, 21, 96, 29, 0x7BEF);
-	draw_line(133, 21, 133, 29, 0x7BEF); draw_line(170, 21, 170, 29, 0x7BEF);
-	draw_line(207, 21, 207, 29, 0x7BEF); draw_line(244, 21, 244, 29, 0x7BEF);
-	draw_line(281, 21, 281, 29, 0x7BEF);
-    
-	draw_digit(1, 22, 22, 0x7BEF); draw_digit(2, 61, 22, 0x7BEF); 
-	draw_digit(3, 98, 22, 0x7BEF); draw_digit(4, 135, 22, 0x7BEF); 
-	draw_digit(5, 172, 22, 0x7BEF); draw_digit(6, 209, 22, 0x7BEF); 
-	draw_digit(7, 246, 22, 0x7BEF); draw_digit(8, 283, 22, 0x7BEF); 
-	
-	draw_line(30, 24, 30, 29, 0x39E7); draw_line(40, 24, 40, 29, 0x39E7); draw_line(50, 24, 50, 29, 0x39E7);
-	draw_line(68, 24, 68, 29, 0x39E7); draw_line(77, 24, 77, 29, 0x39E7); draw_line(86, 24, 86, 29, 0x39E7);
-	draw_line(105, 24, 105, 29, 0x39E7); draw_line(114, 24, 114, 29, 0x39E7); draw_line(123, 24, 123, 29, 0x39E7);
-	draw_line(142, 24, 142, 29, 0x39E7); draw_line(151, 24, 151, 29, 0x39E7); draw_line(160, 24, 160, 29, 0x39E7);
-	draw_line(179, 24, 179, 29, 0x39E7); draw_line(188, 24, 188, 29, 0x39E7); draw_line(197, 24, 197, 29, 0x39E7);
-	draw_line(216, 24, 216, 29, 0x39E7); draw_line(225, 24, 225, 29, 0x39E7); draw_line(234, 24, 234, 29, 0x39E7);
-	draw_line(253, 24, 253, 29, 0x39E7); draw_line(262, 24, 262, 29, 0x39E7); draw_line(271, 24, 271, 29, 0x39E7);
-	draw_line(290, 24, 290, 29, 0x39E7); draw_line(299, 24, 299, 29, 0x39E7); draw_line(308, 24, 308, 29, 0x39E7);
-    
-	draw_line(59, 29, 59, 239, 0x2104); draw_line(96, 29, 96, 239, 0x2104); draw_line(133, 29, 133, 239, 0x2104);
-	draw_line(170, 29, 170, 239, 0x2104); draw_line(207, 29, 207, 239, 0x2104); draw_line(244, 29, 244, 239, 0x2104);
-	draw_line(281, 29, 281, 239, 0x2104);
-	draw_line(30, 29, 30, 239, 0x1082); draw_line(40, 29, 40, 239, 0x1082); draw_line(50, 29, 50, 239, 0x1082);
-	draw_line(68, 29, 68, 239, 0x1082); draw_line(77, 29, 77, 239, 0x1082); draw_line(86, 29, 86, 239, 0x1082);
-	draw_line(105, 29, 105, 239, 0x1082); draw_line(114, 29, 114, 239, 0x1082); draw_line(123, 29, 123, 239, 0x1082);
-	draw_line(142, 29, 142, 239, 0x1082); draw_line(151, 29, 151, 239, 0x1082); draw_line(160, 29, 160, 239, 0x1082);
-	draw_line(179, 29, 179, 239, 0x1082); draw_line(188, 29, 188, 239, 0x1082); draw_line(197, 29, 197, 239, 0x1082);
-	draw_line(216, 29, 216, 239, 0x1082); draw_line(225, 29, 225, 239, 0x1082); draw_line(234, 29, 234, 239, 0x1082);
-	draw_line(253, 29, 253, 239, 0x1082); draw_line(262, 29, 262, 239, 0x1082); draw_line(271, 29, 271, 239, 0x1082);
-	draw_line(290, 29, 290, 239, 0x1082); draw_line(299, 29, 299, 239, 0x1082); draw_line(308, 29, 308, 239, 0x1082);
-	
-	if (playActive) draw_play_button_green();
-	else draw_play_button_gray();
-	
-	draw_skip_button();
-	
-	if (recordActive) {
-		fill_area(137, 145, 7, 13, 0xE71C);
-		fill_area(170, 184, 5, 16, 0xFC10);
-		draw_circle(177, 10, 3, 0xF800);
-		fill_shape(177 - 3, 10 - 3, 177 + 3, 10 + 3, 0xF800, 0xF800);
-	} else if (chooseActive) {
-		choose_instrument();
-	} 
-	
-    for (int row = 0; row < instrument_count; row++) {
-        for (int col = 0; col < NUM_STEPS; col++) {
-            if (sequencer_grid[row][col] == 1) {
-                int x_start = step_x_bounds[col] + 1;
-                int x_end   = step_x_bounds[col + 1] - 1;
-                int y_start = 30 + (row * 20); 
-                int y_end   = y_start + 18; 
-                if (y_end < 240) fill_area(x_start, x_end, y_start, y_end, 0x07E0); 
-            }
-        }
+  clear_screen();
+  fill_area(0, 319, 0, 20, 0x39E7);
+  fill_area(0, 20, 0, 239, 0x39E7);
+  draw_line(0, 0, 319, 0, 0x2104);
+  draw_line(0, 239, 319, 239, 0x2104);
+  draw_line(0, 0, 0, 239, 0x2104);
+  draw_line(319, 0, 319, 239, 0x2104);
+  fill_area(134, 184, 5, 15, 0x2104);
+  draw_line(149, 5, 149, 16, 0x39E7);
+  draw_line(169, 5, 169, 16, 0x39E7);
+  draw_circle(177, 10, 3, 0xF800);
+  fill_shape(177 - 3, 10 - 3, 177 + 3, 10 + 3, 0xF800, 0xF800);
+  draw_line(0, new_instrument_location_y1, 21, new_instrument_location_y1,
+            0x2104);
+  draw_line(0, new_instrument_location_y2, 21, new_instrument_location_y2,
+            0x2104);
+  for (int i = 0; i < instrument_count; i++) {
+    draw_line(0, instrument_separator_positions[i], 21,
+              instrument_separator_positions[i], 0x2104);
+  }
+  for (int i = 0; i < instrument_count; i++) {
+    draw_instrument_label(instrument_types[i], instrument_label_positions[i]);
+  }
+  draw_line(7, add_instrument_plus_y0, 14, add_instrument_plus_y0, 0xBDF7);
+  draw_line(10, add_instrument_plus_y1, 10, add_instrument_plus_y2, 0xBDF7);
+  fill_area(21, 319, 21, 28, 0x1082);
+
+  draw_line(21, 21, 21, 29, 0x7BEF);
+  draw_line(59, 21, 59, 29, 0x7BEF);
+  draw_line(96, 21, 96, 29, 0x7BEF);
+  draw_line(133, 21, 133, 29, 0x7BEF);
+  draw_line(170, 21, 170, 29, 0x7BEF);
+  draw_line(207, 21, 207, 29, 0x7BEF);
+  draw_line(244, 21, 244, 29, 0x7BEF);
+  draw_line(281, 21, 281, 29, 0x7BEF);
+
+  draw_digit(1, 22, 22, 0x7BEF);
+  draw_digit(2, 61, 22, 0x7BEF);
+  draw_digit(3, 98, 22, 0x7BEF);
+  draw_digit(4, 135, 22, 0x7BEF);
+  draw_digit(5, 172, 22, 0x7BEF);
+  draw_digit(6, 209, 22, 0x7BEF);
+  draw_digit(7, 246, 22, 0x7BEF);
+  draw_digit(8, 283, 22, 0x7BEF);
+
+  draw_line(30, 24, 30, 29, 0x39E7);
+  draw_line(40, 24, 40, 29, 0x39E7);
+  draw_line(50, 24, 50, 29, 0x39E7);
+  draw_line(68, 24, 68, 29, 0x39E7);
+  draw_line(77, 24, 77, 29, 0x39E7);
+  draw_line(86, 24, 86, 29, 0x39E7);
+  draw_line(105, 24, 105, 29, 0x39E7);
+  draw_line(114, 24, 114, 29, 0x39E7);
+  draw_line(123, 24, 123, 29, 0x39E7);
+  draw_line(142, 24, 142, 29, 0x39E7);
+  draw_line(151, 24, 151, 29, 0x39E7);
+  draw_line(160, 24, 160, 29, 0x39E7);
+  draw_line(179, 24, 179, 29, 0x39E7);
+  draw_line(188, 24, 188, 29, 0x39E7);
+  draw_line(197, 24, 197, 29, 0x39E7);
+  draw_line(216, 24, 216, 29, 0x39E7);
+  draw_line(225, 24, 225, 29, 0x39E7);
+  draw_line(234, 24, 234, 29, 0x39E7);
+  draw_line(253, 24, 253, 29, 0x39E7);
+  draw_line(262, 24, 262, 29, 0x39E7);
+  draw_line(271, 24, 271, 29, 0x39E7);
+  draw_line(290, 24, 290, 29, 0x39E7);
+  draw_line(299, 24, 299, 29, 0x39E7);
+  draw_line(308, 24, 308, 29, 0x39E7);
+
+  draw_line(59, 29, 59, 239, 0x2104);
+  draw_line(96, 29, 96, 239, 0x2104);
+  draw_line(133, 29, 133, 239, 0x2104);
+  draw_line(170, 29, 170, 239, 0x2104);
+  draw_line(207, 29, 207, 239, 0x2104);
+  draw_line(244, 29, 244, 239, 0x2104);
+  draw_line(281, 29, 281, 239, 0x2104);
+  draw_line(30, 29, 30, 239, 0x1082);
+  draw_line(40, 29, 40, 239, 0x1082);
+  draw_line(50, 29, 50, 239, 0x1082);
+  draw_line(68, 29, 68, 239, 0x1082);
+  draw_line(77, 29, 77, 239, 0x1082);
+  draw_line(86, 29, 86, 239, 0x1082);
+  draw_line(105, 29, 105, 239, 0x1082);
+  draw_line(114, 29, 114, 239, 0x1082);
+  draw_line(123, 29, 123, 239, 0x1082);
+  draw_line(142, 29, 142, 239, 0x1082);
+  draw_line(151, 29, 151, 239, 0x1082);
+  draw_line(160, 29, 160, 239, 0x1082);
+  draw_line(179, 29, 179, 239, 0x1082);
+  draw_line(188, 29, 188, 239, 0x1082);
+  draw_line(197, 29, 197, 239, 0x1082);
+  draw_line(216, 29, 216, 239, 0x1082);
+  draw_line(225, 29, 225, 239, 0x1082);
+  draw_line(234, 29, 234, 239, 0x1082);
+  draw_line(253, 29, 253, 239, 0x1082);
+  draw_line(262, 29, 262, 239, 0x1082);
+  draw_line(271, 29, 271, 239, 0x1082);
+  draw_line(290, 29, 290, 239, 0x1082);
+  draw_line(299, 29, 299, 239, 0x1082);
+  draw_line(308, 29, 308, 239, 0x1082);
+
+  if (playActive)
+    draw_play_button_green();
+  else
+    draw_play_button_gray();
+
+  draw_skip_button();
+
+  if (recordActive) {
+    fill_area(137, 145, 7, 13, 0xE71C);
+    fill_area(170, 184, 5, 16, 0xFC10);
+    draw_circle(177, 10, 3, 0xF800);
+    fill_shape(177 - 3, 10 - 3, 177 + 3, 10 + 3, 0xF800, 0xF800);
+  } else if (chooseActive) {
+    choose_instrument();
+  }
+
+  for (int row = 0; row < instrument_count; row++) {
+    for (int col = 0; col < NUM_STEPS; col++) {
+      if (sequencer_grid[row][col] == 1) {
+        int x_start = step_x_bounds[col] + 1;
+        int x_end = step_x_bounds[col + 1] - 1;
+        int y_start = 30 + (row * 20);
+        int y_end = y_start + 18;
+        if (y_end < 240) fill_area(x_start, x_end, y_start, y_end, 0x07E0);
+      }
     }
+  }
 }
 
-void fill_area (int x0, int x1, int y0, int y1, short int fill_color) {
-	for (int y = y0; y <= y1; y++) {
-		for (int x = x0; x <= x1; x++) {
-			plot_pixel(x, y, fill_color);
-		}
-        update_hardware();
-	}
-}
-
-void fill_shape(int minX, int minY, int maxX, int maxY, short int fill_color, short int edge_color) {
-    for (int y = minY; y <= maxY; y++) {
-        int xLeft = maxX, xRight = minX;
-        for (int x = minX; x <= maxX; x++) {
-            if (get_pixel(x, y) == edge_color) {
-                if (x < xLeft)  xLeft = x;
-                if (x > xRight) xRight = x;
-            }
-        }
-        for (int x = xLeft; x <= xRight; x++) {
-            plot_pixel(x, y, fill_color);
-        }
-        update_hardware();
+void fill_area(int x0, int x1, int y0, int y1, short int fill_color) {
+  for (int y = y0; y <= y1; y++) {
+    for (int x = x0; x <= x1; x++) {
+      plot_pixel(x, y, fill_color);
     }
+    update_hardware();
+  }
 }
 
-void draw_line (int x0, int y0, int x1, int y1, short int line_color) {
-	bool is_steep = abs(y1 - y0) > abs(x1 - x0);
-	if (is_steep) { swap (&x0, &y0); swap (&x1, &y1); }
-	if (x0 > x1) { swap (&x0, &x1); swap (&y0, &y1); }
-	int y_step = 0;
-	int deltax = x1 - x0; 	
-	int deltay = abs(y1 - y0);	
-	int error = -(deltax/2);	
-	int y = y0;					
-	if (y0 < y1) { y_step = 1; } else { y_step = -1; }
-	for (int x = x0; x < x1; x++) {
-		if (is_steep) plot_pixel (y, x, line_color);
-		else plot_pixel (x, y, line_color);
-		error = error + deltay;
-		if (error > 0) {
-			y = y + y_step;
-			error = error - deltax; 
-		}
-	} 	
+void fill_shape(int minX, int minY, int maxX, int maxY, short int fill_color,
+                short int edge_color) {
+  for (int y = minY; y <= maxY; y++) {
+    int xLeft = maxX, xRight = minX;
+    for (int x = minX; x <= maxX; x++) {
+      if (get_pixel(x, y) == edge_color) {
+        if (x < xLeft) xLeft = x;
+        if (x > xRight) xRight = x;
+      }
+    }
+    for (int x = xLeft; x <= xRight; x++) {
+      plot_pixel(x, y, fill_color);
+    }
+    update_hardware();
+  }
+}
+
+void draw_line(int x0, int y0, int x1, int y1, short int line_color) {
+  bool is_steep = abs(y1 - y0) > abs(x1 - x0);
+  if (is_steep) {
+    swap(&x0, &y0);
+    swap(&x1, &y1);
+  }
+  if (x0 > x1) {
+    swap(&x0, &x1);
+    swap(&y0, &y1);
+  }
+  int y_step = 0;
+  int deltax = x1 - x0;
+  int deltay = abs(y1 - y0);
+  int error = -(deltax / 2);
+  int y = y0;
+  if (y0 < y1) {
+    y_step = 1;
+  } else {
+    y_step = -1;
+  }
+  for (int x = x0; x < x1; x++) {
+    if (is_steep)
+      plot_pixel(y, x, line_color);
+    else
+      plot_pixel(x, y, line_color);
+    error = error + deltay;
+    if (error > 0) {
+      y = y + y_step;
+      error = error - deltax;
+    }
+  }
 }
 
 void draw_circle(int cx, int cy, int radius, short int color) {
-    int x = 0; int y = radius; int d = 1 - radius;  
-    while (x <= y) {
-        plot_pixel(cx + x, cy + y, color); plot_pixel(cx - x, cy + y, color);
-        plot_pixel(cx + x, cy - y, color); plot_pixel(cx - x, cy - y, color);
-        plot_pixel(cx + y, cy + x, color); plot_pixel(cx - y, cy + x, color);
-        plot_pixel(cx + y, cy - x, color); plot_pixel(cx - y, cy - x, color);
-        if (d < 0) { d = d + 2 * x + 3; } 
-        else { d = d + 2 * (x - y) + 5; y--; }
-        x++;
+  int x = 0;
+  int y = radius;
+  int d = 1 - radius;
+  while (x <= y) {
+    plot_pixel(cx + x, cy + y, color);
+    plot_pixel(cx - x, cy + y, color);
+    plot_pixel(cx + x, cy - y, color);
+    plot_pixel(cx - x, cy - y, color);
+    plot_pixel(cx + y, cy + x, color);
+    plot_pixel(cx - y, cy + x, color);
+    plot_pixel(cx + y, cy - x, color);
+    plot_pixel(cx - y, cy - x, color);
+    if (d < 0) {
+      d = d + 2 * x + 3;
+    } else {
+      d = d + 2 * (x - y) + 5;
+      y--;
     }
+    x++;
+  }
 }
 
 void draw_digit(int digit, int x, int y, short int color) {
-    for (int row = 0; row < 5; row++) {
-        int mask = digits[digit][row];
-        if (mask & 0b100) plot_pixel(x,     y + row, color); 
-        if (mask & 0b010) plot_pixel(x + 1, y + row, color); 
-        if (mask & 0b001) plot_pixel(x + 2, y + row, color); 
-    }
+  for (int row = 0; row < 5; row++) {
+    int mask = digits[digit][row];
+    if (mask & 0b100) plot_pixel(x, y + row, color);
+    if (mask & 0b010) plot_pixel(x + 1, y + row, color);
+    if (mask & 0b001) plot_pixel(x + 2, y + row, color);
+  }
 }
 
 void draw_char(char ch, int x, int y, int scale, short colour) {
-    if (ch < 'A' || ch > 'Z') return;
-    int row, col, dx, dy;
-    for (row = 0; row < 7; row++) {
-        int byte = characters[ch - 'A'][row];
-        for (col = 0; col < 5; col++) {
-            if (byte & (0x10 >> col)) {
-                for (dy = 0; dy < scale; dy++)
-                    for (dx = 0; dx < scale; dx++)
-                        plot_pixel(x + col*scale + dx, y + row*scale + dy, colour);
-            }
-        }
+  if (ch < 'A' || ch > 'Z') return;
+  int row, col, dx, dy;
+  for (row = 0; row < 7; row++) {
+    int byte = characters[ch - 'A'][row];
+    for (col = 0; col < 5; col++) {
+      if (byte & (0x10 >> col)) {
+        for (dy = 0; dy < scale; dy++)
+          for (dx = 0; dx < scale; dx++)
+            plot_pixel(x + col * scale + dx, y + row * scale + dy, colour);
+      }
     }
+  }
 }
 
 void draw_play_button_green() {
-	fill_area(150, 168, 5, 15, 0x2104);
-	draw_line(163, 10, 156, 7, 0x03E0); 
-    draw_line(156, 7, 156, 13, 0x03E0);
-	draw_line(156, 13, 163, 10, 0x03E0); 
-    fill_shape(156, 7, 163, 13, 0x03E0, 0x03E0);
+  fill_area(150, 168, 5, 15, 0x2104);
+  draw_line(163, 10, 156, 7, 0x03E0);
+  draw_line(156, 7, 156, 13, 0x03E0);
+  draw_line(156, 13, 163, 10, 0x03E0);
+  fill_shape(156, 7, 163, 13, 0x03E0, 0x03E0);
 }
 
 void draw_play_button_gray() {
-	fill_area(150, 168, 5, 15, 0x2104);
-	draw_line(163, 10, 156, 7, 0xE71C); 
-    draw_line(156, 7, 156, 13, 0xE71C);
-	draw_line(156, 13, 163, 10, 0xE71C); 
-    fill_shape(156, 7, 163, 13, 0xE71C, 0xE71C);
+  fill_area(150, 168, 5, 15, 0x2104);
+  draw_line(163, 10, 156, 7, 0xE71C);
+  draw_line(156, 7, 156, 13, 0xE71C);
+  draw_line(156, 13, 163, 10, 0xE71C);
+  fill_shape(156, 7, 163, 13, 0xE71C, 0xE71C);
 }
 
 void draw_skip_button() {
-	draw_line(138, 10, 145, 7, 0xE71C); draw_line(145, 7, 145, 14, 0xE71C);
-	draw_line(145, 13, 138, 10, 0xE71C); fill_shape(138, 7, 145, 13, 0xE71C, 0xE71C);
-	fill_area(137, 138, 7, 13, 0xE71C);
+  draw_line(138, 10, 145, 7, 0xE71C);
+  draw_line(145, 7, 145, 14, 0xE71C);
+  draw_line(145, 13, 138, 10, 0xE71C);
+  fill_shape(138, 7, 145, 13, 0xE71C, 0xE71C);
+  fill_area(137, 138, 7, 13, 0xE71C);
 }
 
-void swap (int* x, int* y) {
-	int temp = *x;
-	*x = *y;
-	*y = temp;
+void swap(int* x, int* y) {
+  int temp = *x;
+  *x = *y;
+  *y = temp;
 }
 
 void clear_screen() {
-	for (int y = 0; y < 240; y++) {
-		for (int x = 0; x < 320; x++) {
-			plot_pixel(x, y, 0x0841);
-		}
-        update_hardware();
-	}
+  for (int y = 0; y < 240; y++) {
+    for (int x = 0; x < 320; x++) {
+      plot_pixel(x, y, 0x0841);
+    }
+    update_hardware();
+  }
 }
 
 void init_mouse() {
-    volatile int *ps2_ptr = (int *)PS2_BASE;
-    clear_ps2();
-    *ps2_ptr = 0xFF;
-    clear_ps2();
-    *ps2_ptr = 0xF4;
-    clear_ps2();
+  volatile int* ps2_ptr = (int*)PS2_BASE;
+  clear_ps2();
+  *ps2_ptr = 0xFF;
+  clear_ps2();
+  *ps2_ptr = 0xF4;
+  clear_ps2();
 }
 
 void clear_ps2() {
-    volatile int *ps2_ptr = (int *)PS2_BASE;
-    while (*ps2_ptr & 0x8000) (void)*ps2_ptr; 
+  volatile int* ps2_ptr = (int*)PS2_BASE;
+  while (*ps2_ptr & 0x8000) (void)*ps2_ptr;
 }
 
 void wait_for_vsync() {
-    volatile int * pixel_ctrl_ptr = (int *)0xFF203020;
-    *pixel_ctrl_ptr = 1;
-    volatile int * status_reg = pixel_ctrl_ptr + 3;
-    while ((*status_reg & 0x1) != 0) {
-        update_hardware();
-    }
+  volatile int* pixel_ctrl_ptr = (int*)0xFF203020;
+  *pixel_ctrl_ptr = 1;
+  volatile int* status_reg = pixel_ctrl_ptr + 3;
+  while ((*status_reg & 0x1) != 0) {
+    update_hardware();
+  }
 }
