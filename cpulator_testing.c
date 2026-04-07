@@ -4,8 +4,10 @@
 // ==========================================
 // Global Constants & Macros
 // ==========================================
-#define PS2_BASE 0xFF200100
+#define PS2_BASE 0xFF200100 // mouse port
+#define PS2_KB_BASE 0xFF200108 // keyboard port
 #define FRAME_BASE 0xFF203020
+#define KEY_BASE    0xFF200050
 
 #define AUDIO_BASE 0xFF203040
 #define AUDIO_CTRL (*(volatile int*)(AUDIO_BASE + 0x0))
@@ -31,7 +33,17 @@
 int metronome_sample[1] = {0};
 int METRONOME_NUM_SAMPLES = 1;
 
-int piano_samples[1] = {0};
+#define MAX_RECORD_SAMPLES 240000
+int piano_samples[MAX_RECORD_SAMPLES] = {0};
+int piano_samples_n = 0;
+
+float note_frequencies[] = { 261.63, 277.18, 293.66, 311.13, 329.63, 349.23, 369.99, 392.00, 415.30, 440.00, 466.16, 493.88, 523.25 };
+volatile float piano_current_freq = 0.0;
+volatile float piano_base_freq = 0.0;
+volatile float piano_phase = 0.0;
+volatile int piano_is_playing = 0;
+int piano_current_playing_code = 0;
+float piano_octave_multiplier = 1.0;
 
 // --- NEW VOCAL BUFFER ---
 #define MAX_VOCAL_SAMPLES 240000 // ~30 seconds of recording time at 8000Hz
@@ -2610,6 +2622,9 @@ short int cursor_bg[5] = {0, 0, 0, 0, 0};
 // Global Playback State
 int playActive = 0;
 int is_recording_mic = 0; //Flag to track recording state
+int is_recording_piano = 0;
+int is_selecting_track = 0;
+int record_target_row = -1;
 int target_record_samples = 0; //How many samples we want to capture
 int track_pos[MAX_INSTRUMENTS][MAX_VOICES]; // changed to 2D array
 int current_tick = 0;
@@ -2696,8 +2711,7 @@ void draw_play_button_green();
 void draw_play_button_gray();
 void draw_skip_button();
 void fill_area(int x0, int x1, int y0, int y1, short int fill_color);
-void fill_shape(int minX, int minY, int maxX, int maxY, short int fill_color,
-                short int edge_color);
+void fill_shape(int minX, int minY, int maxX, int maxY, short int fill_color, short int edge_color);
 void draw_main_screen(int recordActive, int chooseActive);
 void erase_menu();
 void update_left_menu();
@@ -2705,6 +2719,8 @@ void clear_screen();
 void init_mouse();
 void clear_ps2();
 void poll_mouse();
+void poll_keys();
+void poll_keyboard();
 void draw_cursor(int x, int y, short int color);
 void erase_cursor(int x, int y);
 void cache_cursor_bg(int x, int y);
@@ -2806,16 +2822,15 @@ int main(void) {
         }
       } else {
         if (cx > 149 && cx < 169 && cy > 5 && cy < 16) {
-          // --- PLAY BUTTON LOGIC ---
+          // --- PLAY BUTTON ---
           playActive = !playActive;
           erase_cursor(mouseX, mouseY);
+          
           if (playActive) {
             current_tick = 0; 
             sample_counter = 0;
             for (int i = 0; i < instrument_count; i++) {
-              if (sequencer_grid[i][0]) {
-                  track_pos[i][0] = 0; 
-              }
+              if (sequencer_grid[i][0]) track_pos[i][0] = 0; 
             }
             draw_play_button_green();
           } else {
@@ -2825,36 +2840,43 @@ int main(void) {
           draw_cursor(mouseX, mouseY, 0xFFFF);
 
         } else if (cx > 169 && cx < 184 && cy > 5 && cy < 16) {
-          // --- RECORD BUTTON LOGIC ---
-          is_recording_mic = !is_recording_mic; 
-          recordActive = is_recording_mic;
+          // --- RECORD BUTTON ---
           erase_cursor(mouseX, mouseY);
-          
-          if (is_recording_mic) {
-            vocal_samples_n = 0;
-            target_record_samples = (int)(4.0 * 4.0 * (60.0 / beats_per_minute) * 8000.0);
-            if (target_record_samples > MAX_VOCAL_SAMPLES) target_record_samples = MAX_VOCAL_SAMPLES;
-
-            volatile int * audio_ptr = (int *) AUDIO_BASE;
-            while ((*(audio_ptr + 1) & 0xFF) > 0) {
-                int dump = *(audio_ptr + 2);
-                dump = *(audio_ptr + 3);
-            }
-            fill_area(170, 184, 5, 16, 0xFC10); 
-          } else {
-            sample_lengths[2] = vocal_samples_n; 
-            fill_area(170, 184, 5, 16, 0x2104); 
+          if (is_recording_mic || is_recording_piano || is_selecting_track) {
+            // STOP EVERYTHING
+            if (is_recording_mic) sample_lengths[2] = vocal_samples_n; 
+            if (is_recording_piano) sample_lengths[1] = piano_samples_n;
             
-            // Auto-plot note on the grid when stopped early
+            if (record_target_row != -1) {
+                sequencer_grid[record_target_row][0] = 1;
+                fill_area(step_x_bounds[0]+1, step_x_bounds[1]-1, 30+(record_target_row*20), 30+(record_target_row*20)+18, 0x07E0);
+            }
+            
+            is_recording_mic = 0;
+            is_recording_piano = 0;
+            is_selecting_track = 0;
+            record_target_row = -1;
+            fill_area(170, 184, 5, 16, 0x2104); // Gray
+          } else {
+            // START SELECTION
+            int rec_tracks = 0;
+            int last_rec_row = -1;
             for (int r = 0; r < instrument_count; r++) {
-              if (instrument_types[r] == 2) { 
-                sequencer_grid[r][0] = 1;
-                fill_area(step_x_bounds[0]+1, step_x_bounds[1]-1, 30+(r*20), 30+(r*20)+18, 0x07E0);
-                break;
+              if (instrument_types[r] == 1 || instrument_types[r] == 2) {
+                rec_tracks++;
+                last_rec_row = r;
               }
             }
+            
+            if (rec_tracks == 1) {
+                // Instantly record if only 1 valid track exists
+                is_selecting_track = 1; 
+                global_clickX = 100; global_clickY = 35 + (last_rec_row * 20); global_clicked = 1; 
+            } else if (rec_tracks > 1) {
+                is_selecting_track = 1;
+                fill_area(170, 184, 5, 16, 0xFFE0); // Yellow: Awaiting track selection
+            }
           }
-
           draw_circle(177, 10, 3, 0xF800);
           fill_shape(177 - 3, 10 - 3, 177 + 3, 10 + 3, 0xF800, 0xF800);
           cache_cursor_bg(mouseX, mouseY);
@@ -2870,21 +2892,45 @@ int main(void) {
         } else if (cx > 21 && cx < 319 && cy > 29) {
           int row = (cy - 30) / 20;
 
-          if (row < MAX_INSTRUMENTS && row < instrument_count) {
+          if (row < instrument_count) {
             
-            // --- STANDARD DRUM TRACKS ---
-            if (instrument_types[row] > 2) {
+            if (is_selecting_track) {
+               // --- SELECTING A TRACK TO RECORD ---
+               if (instrument_types[row] == 1 || instrument_types[row] == 2) {
+                   is_selecting_track = 0;
+                   record_target_row = row;
+                   target_record_samples = (int)(4.0 * 4.0 * (60.0 / beats_per_minute) * 8000.0);
+                   
+                   if (instrument_types[row] == 1) {
+                       if (target_record_samples > MAX_RECORD_SAMPLES) target_record_samples = MAX_RECORD_SAMPLES;
+                       piano_samples_n = 0;
+                       piano_phase = 0.0;
+                       is_recording_piano = 1;
+                   } else if (instrument_types[row] == 2) {
+                       if (target_record_samples > MAX_RECORD_SAMPLES) target_record_samples = MAX_RECORD_SAMPLES;
+                       vocal_samples_n = 0;
+                       is_recording_mic = 1;
+                       volatile int * audio_ptr = (int *) AUDIO_BASE;
+                       while ((*(audio_ptr + 1) & 0xFF) > 0) {
+                           int dump = *(audio_ptr + 2);
+                           dump = *(audio_ptr + 3);
+                       }
+                   }
+                   erase_cursor(mouseX, mouseY);
+                   fill_area(170, 184, 5, 16, 0xFC10); // Red
+                   draw_circle(177, 10, 3, 0xF800);
+                   fill_shape(177 - 3, 10 - 3, 177 + 3, 10 + 3, 0xF800, 0xF800);
+                   cache_cursor_bg(mouseX, mouseY);
+                   draw_cursor(mouseX, mouseY, 0xFFFF);
+               }
+            } else if (instrument_types[row] > 2) {
+              // --- TOGGLE DRUM NOTE ---
               int col = -1;
               for (int i = 0; i < NUM_STEPS; i++) {
-                if (cx >= step_x_bounds[i] && cx < step_x_bounds[i + 1]) {
-                  col = i;
-                  break;
-                }
+                if (cx >= step_x_bounds[i] && cx < step_x_bounds[i + 1]) { col = i; break; }
               }
-
               if (col != -1) {
                 sequencer_grid[row][col] = !sequencer_grid[row][col];
-
                 int x_start = step_x_bounds[col] + 1;
                 int x_end = step_x_bounds[col + 1] - 1;
                 int y_start = 30 + (row * 20);
@@ -2892,21 +2938,15 @@ int main(void) {
 
                 if (y_end < 240) {
                   erase_cursor(mouseX, mouseY);
-
                   if (sequencer_grid[row][col] == 1) {
                     fill_area(x_start, x_end, y_start, y_end, 0x07E0);
-                    
                     int voice_found = 0;
                     for (int v = 0; v < MAX_VOICES; v++) {
                       if (track_pos[row][v] == -1) {
-                        track_pos[row][v] = 0; 
-                        voice_found = 1;
-                        break;
+                        track_pos[row][v] = 0; voice_found = 1; break;
                       }
                     }
-                    if (!voice_found) {
-                      track_pos[row][0] = 0;
-                    }
+                    if (!voice_found) track_pos[row][0] = 0;
                   } else {
                     fill_area(x_start, x_end, y_start, y_end, 0x0841);
                   }
@@ -2914,44 +2954,38 @@ int main(void) {
                   draw_cursor(mouseX, mouseY, 0xFFFF);
                 }
               }
-            } 
-            // --- NEW: DELETE VOCAL RECORDING LOGIC ---
-            else if (instrument_types[row] == 2) {
-              // If there is recorded audio, delete it when the track is clicked
-              if (vocal_samples_n > 0) {
-                int y_start = 30 + (row * 20);
-                int y_end = y_start + 18;
+            } else if (instrument_types[row] == 1 || instrument_types[row] == 2) {
+                // --- DELETE VOCAL OR PIANO RECORDING ---
+                int sample_count_val = (instrument_types[row] == 1) ? piano_samples_n : vocal_samples_n;
+                if (sample_count_val > 0) {
+                  int y_start = 30 + (row * 20);
+                  int y_end = y_start + 18;
 
-                if (y_end < 240) {
-                  erase_cursor(mouseX, mouseY);
+                  if (y_end < 240) {
+                    erase_cursor(mouseX, mouseY);
 
-                  // 1. Delete the actual audio data from memory
-                  vocal_samples_n = 0;
-                  sample_lengths[2] = 0;
+                    if (instrument_types[row] == 1) {
+                        piano_samples_n = 0;
+                        sample_lengths[1] = 0;
+                    } else {
+                        vocal_samples_n = 0;
+                        sample_lengths[2] = 0;
+                    }
 
-                  // 2. Uncheck all steps on this row so it stops triggering
-                  for (int c = 0; c < NUM_STEPS; c++) {
-                    sequencer_grid[row][c] = 0;
+                    for (int c = 0; c < NUM_STEPS; c++) sequencer_grid[row][c] = 0;
+
+                    fill_area(21, 319, y_start, y_end, 0x0841);
+                    
+                    int major_lines[] = {59, 96, 133, 170, 207, 244, 281};
+                    for (int i = 0; i < 7; i++) draw_line(major_lines[i], y_start, major_lines[i], y_end, 0x2104);
+
+                    int minor_lines[] = {30, 40, 50, 68, 77, 86, 105, 114, 123, 142, 151, 160, 179, 188, 197, 216, 225, 234, 253, 262, 271, 290, 299, 308};
+                    for (int i = 0; i < 24; i++) draw_line(minor_lines[i], y_start, minor_lines[i], y_end, 0x1082);
+
+                    cache_cursor_bg(mouseX, mouseY);
+                    draw_cursor(mouseX, mouseY, 0xFFFF);
                   }
-
-                  // 3. Redraw the empty background for this track
-                  fill_area(21, 319, y_start, y_end, 0x0841);
-                  
-                  // 4. Redraw the vertical grid lines to repair the UI
-                  int major_lines[] = {59, 96, 133, 170, 207, 244, 281};
-                  for (int i = 0; i < 7; i++)
-                    draw_line(major_lines[i], y_start, major_lines[i], y_end, 0x2104);
-
-                  int minor_lines[] = {30, 40, 50, 68, 77, 86, 105, 114, 123,
-                                       142, 151, 160, 179, 188, 197, 216, 225,
-                                       234, 253, 262, 271, 290, 299, 308};
-                  for (int i = 0; i < 24; i++)
-                    draw_line(minor_lines[i], y_start, minor_lines[i], y_end, 0x1082);
-
-                  cache_cursor_bg(mouseX, mouseY);
-                  draw_cursor(mouseX, mouseY, 0xFFFF);
                 }
-              }
             }
           }
         }
@@ -2980,42 +3014,36 @@ int main(void) {
       }
     }
 
-    if (is_recording_mic) {
-      int vocal_row = -1;
-      for (int r = 0; r < instrument_count; r++) {
-        if (instrument_types[r] == 2) {
-          vocal_row = r;
-          break;
-        }
-      }
-      
-      if (vocal_row != -1) {
-        int x_start = 21;
-        int x_current = 21 + (int)(((float)vocal_samples_n / target_record_samples) * 298.0);
+    // --- DRAW GREEN PROGRESS BAR ---
+    if (is_recording_mic || is_recording_piano) {
+      if (record_target_row != -1) {
+        int active_samples = is_recording_mic ? vocal_samples_n : piano_samples_n;
+        int x_current = 21 + (int)(((float)active_samples / target_record_samples) * 298.0);
         if (x_current > 319) x_current = 319;
         
-        int y_start = 30 + (vocal_row * 20);
+        int y_start = 30 + (record_target_row * 20);
         int y_end = y_start + 18;
         
-        if (x_current > x_start && y_end < 240) {
-          fill_area(x_start, x_current, y_start, y_end, 0x07E0); 
+        if (x_current > 21 && y_end < 240) {
+          fill_area(21, x_current, y_start, y_end, 0x07E0); 
         }
       }
     }
 
-    if (is_recording_mic && vocal_samples_n >= target_record_samples) {
-      is_recording_mic = 0;
-      recordActive = 0;
-      sample_lengths[2] = vocal_samples_n; 
+    // --- AUTO-STOP RECORDING ---
+    int active_samples = is_recording_mic ? vocal_samples_n : piano_samples_n;
+    if ((is_recording_mic || is_recording_piano) && active_samples >= target_record_samples) {
+      if (is_recording_mic) sample_lengths[2] = vocal_samples_n; 
+      if (is_recording_piano) sample_lengths[1] = piano_samples_n;
 
-      // Auto-plot note on the grid
-      for (int r = 0; r < instrument_count; r++) {
-        if (instrument_types[r] == 2) {
-          sequencer_grid[r][0] = 1;
-          fill_area(step_x_bounds[0]+1, step_x_bounds[1]-1, 30+(r*20), 30+(r*20)+18, 0x07E0);
-          break;
-        }
+      if (record_target_row != -1) {
+          sequencer_grid[record_target_row][0] = 1;
+          fill_area(step_x_bounds[0]+1, step_x_bounds[1]-1, 30+(record_target_row*20), 30+(record_target_row*20)+18, 0x07E0);
       }
+
+      is_recording_mic = 0;
+      is_recording_piano = 0;
+      record_target_row = -1;
 
       erase_cursor(mouseX, mouseY);
       fill_area(170, 184, 5, 16, 0x2104); 
@@ -3029,16 +3057,141 @@ int main(void) {
   }
 }
 
+void poll_mouse() {
+	volatile int* ps2_ptr = (int*)PS2_BASE;
+	int data;
+	static int prev_btn = 0;
+
+	while (1) {
+		// check if byte1 is available
+		data = *ps2_ptr;
+		if ((data & 0x8000) == 0) return; // no data at all, exit
+
+		int byte1 = data & 0xFF;
+		if (!(byte1 & 0x08)) return;
+
+		// wait for byte2
+		do {
+			data = *ps2_ptr;
+		} while ((data & 0x8000) == 0);
+		
+		int byte2 = data & 0xFF;
+		
+		// wait for byte3
+		do {
+			data = *ps2_ptr;
+		} while ((data & 0x8000) == 0);
+		
+		int byte3 = data & 0xFF;
+
+		// sign extend correctly
+		int dx = (int)(signed char)byte2;
+		int dy = (int)(signed char)byte3;
+
+		if (byte1 & 0x40) dx = 0;
+		if (byte1 & 0x80) dy = 0;
+
+		dx = dx / 2;
+		dy = dy / 2;
+
+		mouseX += dx;
+		mouseY -= dy;
+
+		// Bound the mouse to the screen
+		if (mouseX < 0) 	mouseX = 0;
+		if (mouseX > 319) 	mouseX = 319;
+		if (mouseY < 0) 	mouseY = 0;
+		if (mouseY > 239) 	mouseY = 239;
+
+		int current_btn = byte1 & 0x01;
+		
+		if (current_btn && !prev_btn) {
+			global_clicked = 1;
+			global_clickX = mouseX;
+			global_clickY = mouseY;
+		}
+		
+		prev_btn = current_btn;
+	}
+}
+
 // ==========================================
 // Hardware Synchronization Functions
 // ==========================================
 void update_hardware() {
   update_audio();
   poll_mouse();
+  poll_keyboard();
+  poll_keys();
+}
+
+void poll_keys() {
+  volatile int * key_ptr = (int *) KEY_BASE;
+  int current_key_state = *key_ptr;
+  static int last_key_state = 0;
+  
+  if ((current_key_state & 0x1) && !(last_key_state & 0x1)) {
+      piano_octave_multiplier *= 0.5;
+      piano_current_freq = piano_base_freq * piano_octave_multiplier;
+  }
+  if ((current_key_state & 0x2) && !(last_key_state & 0x2)) {
+      if (piano_octave_multiplier < 8.0) {
+          piano_octave_multiplier *= 2.0;
+          piano_current_freq = piano_base_freq * piano_octave_multiplier;
+      }
+  }
+  last_key_state = current_key_state;
+}
+
+void poll_keyboard() {
+  volatile int* ps2_kb_ptr = (int*)PS2_KB_BASE;
+  int data;
+  static int piano_break_code = 0;
+  
+  while (1) {
+      data = *ps2_kb_ptr;
+      if ((data & 0x8000) == 0) return;
+      
+      unsigned char code = data & 0xFF;
+      if (code == 0xE0) continue;
+      
+      if (code == 0xF0) {
+          piano_break_code = 1;
+      } else {
+          if (piano_break_code) {
+              if (code == piano_current_playing_code) {
+                  piano_is_playing = 0;
+                  piano_current_playing_code = 0;
+              }
+              piano_break_code = 0;
+          } else {
+              if (code != piano_current_playing_code) {
+                  piano_is_playing = 1;
+                  piano_current_playing_code = code;
+                  
+                  if (code == 0x1C)      piano_base_freq = note_frequencies[0];  // A
+                  else if (code == 0x1D) piano_base_freq = note_frequencies[1];  // W
+                  else if (code == 0x1B) piano_base_freq = note_frequencies[2];  // S
+                  else if (code == 0x24) piano_base_freq = note_frequencies[3];  // E
+                  else if (code == 0x23) piano_base_freq = note_frequencies[4];  // D
+                  else if (code == 0x2B) piano_base_freq = note_frequencies[5];  // F
+                  else if (code == 0x2C) piano_base_freq = note_frequencies[6];  // T
+                  else if (code == 0x34) piano_base_freq = note_frequencies[7];  // G
+                  else if (code == 0x35) piano_base_freq = note_frequencies[8];  // Y
+                  else if (code == 0x33) piano_base_freq = note_frequencies[9];  // H
+                  else if (code == 0x3C) piano_base_freq = note_frequencies[10]; // U
+                  else if (code == 0x3B) piano_base_freq = note_frequencies[11]; // J
+                  else if (code == 0x42) piano_base_freq = note_frequencies[12]; // K
+                  
+                  piano_current_freq = piano_base_freq * piano_octave_multiplier;
+              }
+          }
+      }
+  }
 }
 
 void update_audio() {
-  // --- 1. RECORDING PHASE (Using your exact part2.c logic) ---
+  // --- 1. MIC RECORDING PHASE ---
   if (is_recording_mic) {
     volatile int * audio_ptr = (int *) AUDIO_BASE;
     int fifospace = *(audio_ptr + 1); 
@@ -3046,17 +3199,14 @@ void update_audio() {
 
     while (rarc > 0 && vocal_samples_n < target_record_samples) {
         int left = *(audio_ptr + 2);
-        int right = *(audio_ptr + 3);
-        
+        (void)*(audio_ptr + 3);
         vocal_samples[vocal_samples_n] = left; 
         vocal_samples_n++;
-        
-        fifospace = *(audio_ptr + 1);
-        rarc = fifospace & 0xFF;
+        rarc--;
     }
   }
 
-  // --- 2. MIXING PHASE ---
+  // --- 2. MIXING & PIANO RECORDING PHASE ---
   int left_space = (AUDIO_FIFOSPACE >> 24) & 0xFF;
   int right_space = (AUDIO_FIFOSPACE >> 16) & 0xFF;
   int space = (left_space < right_space) ? left_space : right_space;
@@ -3064,6 +3214,19 @@ void update_audio() {
   while (space > 0) {
     long long mixed_sample = 0;
 
+    // --- Generate Live Piano Audio ---
+    if (is_recording_piano && piano_samples_n < target_record_samples) {
+        int p_sample = 0;
+        if (piano_is_playing && piano_current_freq > 0.0) {
+            piano_phase += (piano_current_freq / 8000.0);
+            if (piano_phase >= 1.0) piano_phase -= 1.0;
+            p_sample = (piano_phase < 0.5) ? 10000000 : -10000000;
+        }
+        piano_samples[piano_samples_n++] = p_sample;
+        mixed_sample += p_sample; // Add to output mix so user hears it live!
+    }
+
+    // --- Standard Grid Mixing ---
     for (int i = 0; i < instrument_count; i++) {
       int type = instrument_types[i];
       for (int v = 0; v < MAX_VOICES; v++) {
@@ -3118,55 +3281,6 @@ void update_audio() {
         }
       }
     }
-  }
-}
-
-void poll_mouse() {
-  volatile int* ps2_ptr = (int*)PS2_BASE;
-  int data;
-  static int prev_btn = 0;
-
-  while (1) {
-    data = *ps2_ptr;
-    if ((data & 0x8000) == 0) return;
-
-    int byte1 = data & 0xFF;
-    if (!(byte1 & 0x08)) continue;
-
-    do {
-      data = *ps2_ptr;
-    } while ((data & 0x8000) == 0);
-    int byte2 = data & 0xFF;
-
-    do {
-      data = *ps2_ptr;
-    } while ((data & 0x8000) == 0);
-    int byte3 = data & 0xFF;
-
-    int dx = (int)(signed char)byte2;
-    int dy = (int)(signed char)byte3;
-
-    if (byte1 & 0x40) dx = 0;
-    if (byte1 & 0x80) dy = 0;
-
-    dx = dx / 5;
-    dy = dy / 5;
-
-    mouseX += dx;
-    mouseY -= dy;
-
-    if (mouseX < 0) mouseX = 0;
-    if (mouseX > 319) mouseX = 319;
-    if (mouseY < 0) mouseY = 0;
-    if (mouseY > 239) mouseY = 239;
-
-    int current_btn = byte1 & 0x01;
-    if (current_btn && !prev_btn) {
-      global_clicked = 1;
-      global_clickX = mouseX;
-      global_clickY = mouseY;
-    }
-    prev_btn = current_btn;
   }
 }
 
