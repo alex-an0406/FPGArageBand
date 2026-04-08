@@ -150,6 +150,9 @@ int beats_per_minute = 120;
 
 // Playhead State
 int last_drawn_tick = -1;
+// Persist last drawn values
+int last_active_samples = 0;
+int last_record_row = -1;
 
 // Map the instrument types to arrays
 const int* sample_pointers[6];
@@ -463,6 +466,13 @@ int main(void) {
 					if (row >= 0 && row < instrument_count) {
 						remove_instrument_at(row);
 
+						if (last_record_row == row) {
+							last_record_row = -1;
+							last_active_samples = 0;
+						} else if (last_record_row > row) {
+							last_record_row--;  // row shifted up due to removal
+						}
+
 						// FIX 2: Removed shadowed re-declaration of pixel_ctrl_ptr.
 						// The outer pixel_ctrl_ptr is already in scope and correct.
 						int back  = *(pixel_ctrl_ptr + 1);
@@ -613,7 +623,7 @@ int main(void) {
                         
                         if (record_target_row != -1) {
                             sequencer_grid[record_target_row][0] = 1;
-                            draw_to_both(step_x_bounds[0]+1, step_x_bounds[1]-1, 30+(record_target_row*20), 30+(record_target_row*20)+18, 0x07E0);
+                            draw_to_both(step_x_bounds[0]+1, step_x_bounds[1]-1, 30+(record_target_row*20), 30+(record_target_row*20)+18, 0x881F);
                         }
                         
                         is_recording_mic = 0;
@@ -735,33 +745,42 @@ int main(void) {
                                 draw_record_button_active();
                             }
                         } else if (instrument_types[row] == 1 || instrument_types[row] == 2) {
-                            int sample_count_val = (instrument_types[row] == 1) ? piano_samples_n : vocal_samples_n;
-                            if (sample_count_val > 0) {
-                                if (instrument_types[row] == 1) {
-                                    piano_samples_n = 0;
-                                    sample_lengths[1] = 0;
-                                } else {
-                                    vocal_samples_n = 0;
-                                    sample_lengths[2] = 0;
-                                }
-                                for (int c = 0; c < NUM_STEPS; c++) sequencer_grid[row][c] = 0;
-                                
-                                int y_start = 30 + (row * 20);
-                                int y_end   = y_start + 18;
-                                
-                                draw_to_both(21, 319, y_start, y_end, 0x0841);
-                                
-                                volatile int *pixel_ctrl_ptr = (int *)FRAME_BASE;
-                                int back = *(pixel_ctrl_ptr + 1);
-                                int other = (back == (int)&Buffer1) ? (int)&Buffer2 : (int)&Buffer1;
-                                for (int buf = 0; buf < 2; buf++) {
-                                    pixel_buffer_start = (buf == 0) ? back : other;
-                                    int major_lines[] = {59, 96, 133, 170, 207, 244, 281};
-                                    for (int i = 0; i < 7; i++) draw_line(major_lines[i], y_start, major_lines[i], y_end, 0x2104);
-                                    int minor_lines[] = {30, 40, 50, 68, 77, 86, 105, 114, 123, 142, 151, 160, 179, 188, 197, 216, 225, 234, 253, 262, 271, 290, 299, 308};
-                                    for (int i = 0; i < 24; i++) draw_line(minor_lines[i], y_start, minor_lines[i], y_end, 0x1082);
-                                }
-                                pixel_buffer_start = back;
+							if (sequencer_grid[row][0] == 1) {
+								// 1. Deactivate the sequence step
+								sequencer_grid[row][0] = 0;
+								
+								// 2. Clear the audio buffer references
+								if (instrument_types[row] == 1) {
+									piano_samples_n = 0;
+									sample_lengths[1] = 0;
+								} else {
+									vocal_samples_n = 0;
+									sample_lengths[2] = 0;
+								}
+
+								// 3. Clear the visual bar and restore the background/grid
+								int y_start = 30 + (row * 20);
+								int y_end = y_start + 18;
+								
+								// Clear the row to black (using draw_to_both to ensure both buffers are wiped)
+								draw_to_both(21, 319, y_start, y_end, 0x0000); 
+
+								// Redraw the grid lines over the cleared area (matches your progress bar logic)
+								int minor_lines[] = {30, 40, 50, 68, 77, 86, 105, 114, 123, 142, 151, 160, 179, 188, 197, 216, 225, 234, 253, 262, 271, 290, 299, 308};
+								int major_lines[] = {59, 96, 133, 170, 207, 244, 281};
+
+								for (int buf = 0; buf < 2; buf++) {
+									// Toggle buffer manually for grid restoration if draw_to_both isn't used for lines
+									// (Or just use draw_to_both inside these loops)
+									for (int i = 0; i < 24; i++) 
+										draw_to_both(minor_lines[i], minor_lines[i], y_start, y_end + 1, 0x1082);
+									for (int i = 0; i < 7; i++) 
+										draw_to_both(major_lines[i], major_lines[i], y_start, y_end + 1, 0x2104);
+								}
+								
+								// Reset the latched draw row so the progress bar loop stops rendering it
+								last_record_row = -1;
+								last_active_samples = 0;
                             }
                         } else if (instrument_types[row] > 2) {
                             int col = -1;
@@ -807,49 +826,101 @@ int main(void) {
 			}
 		}
 
+		// Render Progress Bar 
+
+		// Decide which row to draw on
+		if (record_target_row != -1) {
+			last_record_row = record_target_row;
+		}
+		int draw_row = (record_target_row != -1) ? record_target_row : last_record_row;
+
+		// Only draw if we have a valid row (current OR latched)
+		if (draw_row != -1) {
+			int active_samples;
+
+			if (is_recording_mic || is_recording_piano) {
+				active_samples = is_recording_mic ? vocal_samples_n : piano_samples_n;
+				last_active_samples = active_samples;  // latch latest value
+			} else {
+				active_samples = last_active_samples;  // keep drawing final frame
+			}
+
+			int x_current = 21 + (int)(((float)active_samples / target_record_samples) * 298.0);
+
+			int x_max = 21 + 298;
+			if (x_current > x_max) x_current = x_max;
+
+			int y_start = 30 + (draw_row * 20);  
+			int y_end = y_start + 18;
+
+			if (y_end < 240) {
+
+				// redraw background
+				fill_area(22, 319, y_start, y_end, 0x0000);
+
+				// redraw grid lines
+				int minor_lines[] = {
+					30, 40, 50, 68, 77, 86, 105, 114, 123,
+					142, 151, 160, 179, 188, 197,
+					216, 225, 234, 253, 262, 271,
+					290, 299, 308
+				}; 
+
+				for (int i = 0; i < 24; i++) {
+					draw_line(minor_lines[i], y_start, minor_lines[i], y_end + 1, 0x1082);
+				}
+
+				// redraw major bars
+				int major_lines[] = {59, 96, 133, 170, 207, 244, 281};
+				for (int i = 0; i < 7; i++) {
+					draw_line(major_lines[i], y_start, major_lines[i], y_end + 1, 0x2104);
+				}
+
+				// draw progress bar
+				if (x_current > 21) {
+					fill_area(21, x_current, y_start, y_end, 0x881F);
+				}
+			}
+		}
+
+
+		// Auto Stop Recording
+		int active_samples = is_recording_mic ? vocal_samples_n : piano_samples_n;
+
+		if ((is_recording_mic || is_recording_piano) && active_samples >= target_record_samples) {
+			if (is_recording_mic) sample_lengths[2] = vocal_samples_n; 
+			if (is_recording_piano) sample_lengths[1] = piano_samples_n;
+
+			if (record_target_row != -1) {
+				sequencer_grid[record_target_row][0] = 1;
+				draw_to_both(
+					step_x_bounds[0]+1,
+					step_x_bounds[1]-1,
+					30+(record_target_row*20),
+					30+(record_target_row*20)+18,
+					0x881F
+				);
+			}
+
+			is_recording_mic = 0;
+			is_recording_piano = 0;
+
+			draw_record_button_inactive();
+		}
+
 		// 4. Playhead delta rendering — per buffer.
 		// Each buffer erases its own stale tick and draws the current one,
 		// preventing ghost playheads on alternating frames.
+		// NEW — always redraw playhead after progress bar may have wiped it
 		if (*lastTick_ptr != current_tick) {
 			if (*lastTick_ptr >= 0) erase_playhead(*lastTick_ptr);
-			if (playActive) draw_playhead(current_tick, 0xFFFF);
 			*lastTick_ptr = current_tick;
 		}
 
-        // Render Progress Bar 
-		if (is_recording_mic || is_recording_piano) {
-            if (record_target_row != -1) {
-                int active_samples = is_recording_mic ? vocal_samples_n : piano_samples_n;
-                int x_current = 21 + (int)(((float)active_samples / target_record_samples) * 298.0);
-                if (x_current > 319) x_current = 319;
-                
-                int y_start = 30 + (record_target_row * 20);
-                int y_end = y_start + 18;
-                
-                if (x_current > 21 && y_end < 240) {
-                    fill_area(21, x_current, y_start, y_end, 0x07E0); 
-                }
-            }
-        }
-        
-        // Auto Stop Recording
-        int active_samples = is_recording_mic ? vocal_samples_n : piano_samples_n;
-        if ((is_recording_mic || is_recording_piano) && active_samples >= target_record_samples) {
-            if (is_recording_mic) sample_lengths[2] = vocal_samples_n; 
-            if (is_recording_piano) sample_lengths[1] = piano_samples_n;
-
-            if (record_target_row != -1) {
-                sequencer_grid[record_target_row][0] = 1;
-                draw_to_both(step_x_bounds[0]+1, step_x_bounds[1]-1, 30+(record_target_row*20), 30+(record_target_row*20)+18, 0x07E0);
-            }
-
-            is_recording_mic = 0;
-            is_recording_piano = 0;
-            record_target_row = -1;
-
-            draw_record_button_inactive();
-        }
-
+		if (current_tick >= 0 && !chooseActive) {
+			draw_playhead(current_tick, 0xFFFF);
+		}
+		
 		// 5. Cache and draw cursor at current mouse position
 		cache_cursor_bg(mouseX, mouseY, cache_ptr);
 		draw_cursor(mouseX, mouseY, 0xFFFF);
@@ -1183,12 +1254,21 @@ void erase_menu() {
                     int x_end = step_x_bounds[col + 1] - 1;
                     int y_start = 30 + (row * 20);
                     int y_end = y_start + 18;
+					
                     if (x_end >= 70 && x_start <= 250 && y_end >= 50 && y_start <= 190) {
                         fill_area(x_start, x_end, y_start, y_end - 1, 0x881F);
                     }
                 }
             }
         }
+
+		if (current_tick >= 0) {
+            int px = step_x_bounds[current_tick] + (step_x_bounds[current_tick + 1] - step_x_bounds[current_tick]) / 2;
+            if (px >= 70 && px <= 250) {
+                draw_line(px, 50, px, 190, 0xFFFF);
+            }
+        }
+    
     }
 
     pixel_buffer_start = back; // restore
@@ -1746,7 +1826,7 @@ void draw_main_screen(int recordActive, int chooseActive) {
 				int y_start = 30 + (row * 20);
 				int y_end = y_start + 18;
 				if (y_end < 240) {
-					fill_area(x_start, x_end, y_start, y_end, 0x07E0);
+					fill_area(x_start, x_end, y_start, y_end, 0x881F);
 				}
 			}
 		}
