@@ -322,9 +322,6 @@ int main(void) {
 	
 	AUDIO_CTRL = 0xC;
     AUDIO_CTRL = 0x0;
-
-	int stop = 0;
-	int* stop_ptr = &stop;
 	
 	sample_pointers[0] = NULL;
 	sample_pointers[1] = piano_samples;
@@ -563,6 +560,51 @@ int main(void) {
 					pixel_buffer_start = other;
 					cache_cursor_bg(mouseX, mouseY, other_cache);
 
+				} else if (clickX >= 134 && clickX <= 149 && clickY > 5 && clickY < 16) {
+					// --- SKIP TO START BUTTON ---
+					int back  = *(pixel_ctrl_ptr + 1);
+					int other = (back == (int)&Buffer1) ? (int)&Buffer2 : (int)&Buffer1;
+
+					short int *back_cache  = (back  == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
+					short int *other_cache = (other == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
+
+					int back_lastX = (back  == (int)&Buffer1) ? prevMouseX1 : prevMouseX2;
+					int back_lastY = (back  == (int)&Buffer1) ? prevMouseY1 : prevMouseY2;
+					int other_lastX = (other  == (int)&Buffer1) ? prevMouseX1 : prevMouseX2;
+					int other_lastY = (other  == (int)&Buffer1) ? prevMouseY1 : prevMouseY2;
+					
+					pixel_buffer_start = back;
+					erase_cursor(back_lastX, back_lastY, back_cache);
+					pixel_buffer_start = other;
+					erase_cursor(other_lastX, other_lastY, other_cache);
+					
+					// 1. Reset the playhead and sample timing to absolute zero
+					current_tick = 0; 
+					sample_counter = 0;
+					
+					// 2. If it is actively playing, immediately trigger the instruments on step 0
+					// By finding an available polyphonic voice to assign the sample to.
+					if (playActive) {
+						for (int i = 0; i < instrument_count; i++) {
+							if (sequencer_grid[i][0]) {
+								int voice_found = 0;
+								for (int v = 0; v < MAX_VOICES; v++) {
+									if (track_pos[i][v] == -1) {
+										track_pos[i][v] = 0;
+										voice_found = 1;
+										break; 
+									}
+								}
+								// If all voices are busy, gracefully overwrite the oldest (voice 0)
+								if (!voice_found) track_pos[i][0] = 0;
+							}
+						}
+					}
+
+					pixel_buffer_start = back;
+					cache_cursor_bg(mouseX, mouseY, back_cache);
+					pixel_buffer_start = other;
+					cache_cursor_bg(mouseX, mouseY, other_cache);
 				} else if (clickX > 149 && clickX < 169 && clickY > 5 && clickY < 16) {
 					playActive = !playActive;
 					int back  = *(pixel_ctrl_ptr + 1);
@@ -660,16 +702,6 @@ int main(void) {
                             pixel_buffer_start = back;
                         }
                     }
-
-					/*
-					if (recordActive) {
-						draw_record_button_active();
-						wait_for_vsync();
-						play_audio(metronome_samples, METRONOME_NUM_SAMPLES);
-						count_bars(beats_per_minute, 13, 0, stop_ptr);
-						draw_record_button_inactive();
-						recordActive = !recordActive;
-					}*/
 
 					pixel_buffer_start = back;
 					cache_cursor_bg(mouseX, mouseY, back_cache);
@@ -854,31 +886,55 @@ int main(void) {
 			int y_end = y_start + 18;
 
 			if (y_end < 240) {
+				// Determine if the menu is vertically blocking this specific row
+				int is_menu_blocking = (chooseActive && y_end >= 50 && y_start <= 190);
 
-				// redraw background
-				fill_area(22, 319, y_start, y_end, 0x0000);
-
-				// redraw grid lines
-				int minor_lines[] = {
-					30, 40, 50, 68, 77, 86, 105, 114, 123,
-					142, 151, 160, 179, 188, 197,
-					216, 225, 234, 253, 262, 271,
-					290, 299, 308
-				}; 
-
-				for (int i = 0; i < 24; i++) {
-					draw_line(minor_lines[i], y_start, minor_lines[i], y_end + 1, 0x1082);
+				// 1. REDRAW BACKGROUND
+				if (is_menu_blocking) {
+					fill_area(22, 69, y_start, y_end, 0x0000);   // Left of menu
+					fill_area(251, 319, y_start, y_end, 0x0000); // Right of menu
+				} else {
+					fill_area(22, 319, y_start, y_end, 0x0000);  // Full width
 				}
 
-				// redraw major bars
+				// 2. REDRAW GRID LINES
+				int minor_lines[] = {30, 40, 50, 68, 77, 86, 105, 114, 123, 142, 151, 160, 179, 188, 197, 216, 225, 234, 253, 262, 271, 290, 299, 308};
+				for (int i = 0; i < 24; i++) {
+					// Only draw line if it's NOT inside the menu X-bounds (70-250)
+					if (!is_menu_blocking || (minor_lines[i] < 70 || minor_lines[i] > 250)) {
+						draw_line(minor_lines[i], y_start, minor_lines[i], y_end + 1, 0x1082);
+					}
+				}
+
+				// 3. REDRAW MAJOR BARS
 				int major_lines[] = {59, 96, 133, 170, 207, 244, 281};
 				for (int i = 0; i < 7; i++) {
-					draw_line(major_lines[i], y_start, major_lines[i], y_end + 1, 0x2104);
+					if (!is_menu_blocking || (major_lines[i] < 70 || major_lines[i] > 250)) {
+						draw_line(major_lines[i], y_start, major_lines[i], y_end + 1, 0x2104);
+					}
 				}
 
-				// draw progress bar
+				// 4. DRAW PROGRESS BAR (Already has your split logic)
 				if (x_current > 21) {
-					fill_area(21, x_current, y_start, y_end, 0x881F);
+					if (is_menu_blocking) {
+						int segment1_end = (x_current < 70) ? x_current : 69;
+						if (segment1_end >= 22) fill_area(22, segment1_end, y_start, y_end, 0x881F);
+						if (x_current > 250)    fill_area(251, x_current, y_start, y_end, 0x881F);
+					} else {
+						fill_area(22, x_current, y_start, y_end, 0x881F);
+					}
+				}
+
+				// 5. REDRAW PLAYHEAD (Row-Specific Clipping)
+				if (playActive && current_tick >= 0) {
+					// Find the center X of the current tick
+					int ph_x = step_x_bounds[current_tick] + (step_x_bounds[current_tick + 1] - step_x_bounds[current_tick]) / 2;
+
+					// Only draw if playhead is NOT behind the menu OR if the menu isn't blocking this row
+					if (!is_menu_blocking || (ph_x < 70 || ph_x > 250)) {
+						// Draw only the segment of the playhead that exists within this row's Y-bounds
+						draw_line(ph_x, y_start, ph_x, y_end, 0xFFFF);
+					}
 				}
 			}
 		}
@@ -1718,7 +1774,7 @@ void draw_main_screen(int recordActive, int chooseActive) {
 	draw_line(281, 21, 281, 29, 0x7BEF);
 
 	//draw numbers on the ticks
-	draw_digit(1, 22, 22, 0x7BEF);
+	draw_digit(1, 23, 22, 0x7BEF);
 	draw_digit(2, 61, 22, 0x7BEF);
 	draw_digit(3, 98, 22, 0x7BEF);
 	draw_digit(4, 135, 22, 0x7BEF);
@@ -2018,7 +2074,7 @@ void draw_record_button_active() {
         // erase cursor on other buffer before drawing
         if (buf == 1) erase_cursor(mouseX, mouseY, other_cache);
 
-        fill_area(170, 184, 5, 16, 0xFC10);
+        fill_area(170, 184, 5, 15, 0xFC10);
         draw_circle(177, 10, 3, 0xF800);
         fill_shape(177 - 3, 10 - 3, 177 + 3, 10 + 3, 0xF800, 0xF800);
     }
@@ -2044,7 +2100,7 @@ void draw_record_button_inactive() {
 
         if (buf == 1) erase_cursor(mouseX, mouseY, other_cache);
 
-        fill_area(170, 184, 5, 16, 0x2104);
+        fill_area(170, 184, 5, 15, 0x2104);
         draw_circle(177, 10, 3, 0xF800);
         fill_shape(177 - 3, 10 - 3, 177 + 3, 10 + 3, 0xF800, 0xF800);
     }
