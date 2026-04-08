@@ -3073,7 +3073,54 @@ int main(void) {
 					pixel_buffer_start = other;
 					cache_cursor_bg(mouseX, mouseY, other_cache);
 
+				} else if (clickX >= 134 && clickX <= 149 && clickY > 5 && clickY < 16) {
+					// --- SKIP TO START BUTTON ---
+					int back  = *(pixel_ctrl_ptr + 1);
+					int other = (back == (int)&Buffer1) ? (int)&Buffer2 : (int)&Buffer1;
+
+					short int *back_cache  = (back  == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
+					short int *other_cache = (other == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
+
+					int back_lastX = (back  == (int)&Buffer1) ? prevMouseX1 : prevMouseX2;
+					int back_lastY = (back  == (int)&Buffer1) ? prevMouseY1 : prevMouseY2;
+					int other_lastX = (other  == (int)&Buffer1) ? prevMouseX1 : prevMouseX2;
+					int other_lastY = (other  == (int)&Buffer1) ? prevMouseY1 : prevMouseY2;
+					
+					pixel_buffer_start = back;
+					erase_cursor(back_lastX, back_lastY, back_cache);
+					pixel_buffer_start = other;
+					erase_cursor(other_lastX, other_lastY, other_cache);
+					
+					// 1. Reset the playhead and sample timing to absolute zero
+					current_tick = 0; 
+					sample_counter = 0;
+					
+					// 2. If it is actively playing, immediately trigger the instruments on step 0
+					// By finding an available polyphonic voice to assign the sample to.
+					if (playActive) {
+						for (int i = 0; i < instrument_count; i++) {
+							if (sequencer_grid[i][0]) {
+								int voice_found = 0;
+								for (int v = 0; v < MAX_VOICES; v++) {
+									if (track_pos[i][v] == -1) {
+										track_pos[i][v] = 0;
+										voice_found = 1;
+										break; 
+									}
+								}
+								// If all voices are busy, gracefully overwrite the oldest (voice 0)
+								if (!voice_found) track_pos[i][0] = 0;
+							}
+						}
+					}
+
+					pixel_buffer_start = back;
+					cache_cursor_bg(mouseX, mouseY, back_cache);
+					pixel_buffer_start = other;
+					cache_cursor_bg(mouseX, mouseY, other_cache);
+
 				} else if (clickX > 149 && clickX < 169 && clickY > 5 && clickY < 16) {
+					// --- PLAY / PAUSE BUTTON ---
 					playActive = !playActive;
 					int back  = *(pixel_ctrl_ptr + 1);
 					int other = (back == (int)&Buffer1) ? (int)&Buffer2 : (int)&Buffer1;
@@ -3092,15 +3139,12 @@ int main(void) {
 					erase_cursor(other_lastX, other_lastY, other_cache);
 						
 					if (playActive) {
-                        current_tick = 0; 
-                        sample_counter = 0;
-                        for (int i = 0; i < instrument_count; i++) {
-                            if (sequencer_grid[i][0]) track_pos[i][0] = 0; 
-                        }
+						// Removed the hard reset variables here. 
+						// playActive state simply unfreezes the counters in update_audio(), seamlessly resuming.
 						draw_play_button_green();
-                    } else {
+					} else {
 						draw_play_button_gray();
-                    }
+					}
 
 					pixel_buffer_start = back;
 					cache_cursor_bg(mouseX, mouseY, back_cache);
