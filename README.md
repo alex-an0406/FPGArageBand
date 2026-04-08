@@ -12,27 +12,34 @@ Our project called FPGArageBand is an interactive music producing tool that allo
 
 
 ![Alt text](figures/fig1.png)
-    Figure 1. Default Main Screen of FPGArageBand     
+    
+Figure 1. Default Main Screen of FPGArageBand   
+	
 ![Alt text](figures/fig2.png)               
-    Figure 2. Choose Instrument Menu
+Figure 2. Choose Instrument Menu
 
 Clicking on the plus sign in the left panel opens up the choose instrument screen. Five instruments are included: piano, bass drum, snare drum, hi hat and vocals. Clicking on any of these icons using the cursor will add the corresponding instrument to the left panel (Figure 2). 
 
 Bass drums, snare drums and hi hats function as a beatmaker. Clicking on the horizontal section of the grid corresponding to the drum will place down cells (or beats) at the sub-measure. When creating the beat, the type of drum placed will play back to the user immediately on click  (Figure 3).
 
 ![Alt text](figures/fig3.png)
+
 Figure 3. Drum Beat Example 
 
 After adding vocals and piano, the record button can be used. If there is only one track on the left panel with a recordable instrument (piano or vocals), clicking the record button will immediately begin the recording process. If there is more than one track, then the record button will light up yellow (Figure 4). While in this yellow state, the user must click on the horizontal section of the grid corresponding to the track that they wish to record in. Once clicked, the recording will immediately begin, with the button turning pink to indicate the recording state (Figure 5). While in the recording state, the user can sing into the mic if they are recording vocals or use the PS/2 Keyboard keys to play the piano. A progress bar will be continuously drawn across the screen, stopping when the user clicks the record button again or if the end of the grid has been reached, signaling that eight measures have passed. 
 
 ![Alt text](figures/fig4.png)
+
 Figure 4. More Than One Recordable Track Available     
 ![Alt text](figures/fig5.png)             
+
 Figure 5. Recording in Progress
 
 The piano is available in one octave at a time, and the pushbuttons on the DE1-SoC board can pitch the octave of the piano up or down. When in the recording state, the notes will be played back to the user immediately upon pressing the keys. The piano is otherwise not available to be played/heard.
+
 ![Alt text](figures/fig6.png)
-        Figure 6. Playing Tracks Using Play Button    
+       
+Figure 6. Playing Tracks Using Play Button    
 ![Alt text](figures/fig7.png)      
         Figure 7. Skip to Back Button + Removing Instruments
 
