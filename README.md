@@ -8,7 +8,7 @@ Our project called FPGArageBand is an interactive music producing tool that allo
 
 2.0 Instructions for Operation
 
-	The program opens on the main screen of the audio workstation, consisting of various buttons for user interaction and grid lines that indicate the measures (or bars) of the music to be played. The graphical user interface (GUI) includes the following buttons: play, skip to start, record, add instrument, and remove instrument. A cursor is drawn at the center of the screen on startup, erasing and redrawing on the screen as the user moves their mouse to different positions (Figure 1).
+The program opens on the main screen of the audio workstation, consisting of various buttons for user interaction and grid lines that indicate the measures (or bars) of the music to be played. The graphical user interface (GUI) includes the following buttons: play, skip to start, record, add instrument, and remove instrument. A cursor is drawn at the center of the screen on startup, erasing and redrawing on the screen as the user moves their mouse to different positions (Figure 1).
 
 
 ![Alt text](figures/fig1.png)
