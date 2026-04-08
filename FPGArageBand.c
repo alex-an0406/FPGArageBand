@@ -84,9 +84,9 @@ int bass_samples[];
 int snare_samples[];
 int hihat_samples[];
 
-int bass_samples_n = 7509;
-int snare_samples_n = 7509;
-int hihat_samples_n = 5120;
+extern int bass_samples_n;
+extern int snare_samples_n;
+extern int hihat_samples_n;
 
 int piano_samples[MAX_RECORD_SAMPLES] = {0};
 int piano_samples_n = 0;
@@ -127,7 +127,7 @@ int is_recording_piano = 0;
 int is_selecting_track = 0;
 int record_target_row = -1;
 int target_record_samples = 0; 
-int track_pos[MAX_INSTRUMENTS][MAX_VOICES]; // changed to 2D array
+int track_pos[MAX_INSTRUMENTS][MAX_VOICES]; //2D array
 int current_tick = 0;
 int sample_counter = 0;
 
@@ -164,8 +164,8 @@ int add_instrument_plus_y2 = 43;
 
 // Keeping track of instruments chosen and shown
 int instrument_count = 0;
-int instrument_separator_positions[MAX_INSTRUMENTS] = {0}; 						//location of the instrument separators 
-int instrument_types[MAX_INSTRUMENTS] = {0};									//instrument type per slot
+int instrument_separator_positions[MAX_INSTRUMENTS] = {0}; //location of the instrument separators 
+int instrument_types[MAX_INSTRUMENTS] = {0}; //instrument type per slot
 int instrument_label_positions[MAX_INSTRUMENTS] = {1, 1, 1, 1, 1, 1, 1, 1, 1}; 	//locations of each instrument label in y coordinates
 
 // Bit positions of each character
@@ -322,7 +322,7 @@ int main(void) {
 	sample_lengths[5] = bass_samples_n;
 	
 
-	// CHANGED: Nested loop to initialize all 4 voices for every instrument to -1 (silent)
+	//Nested loop to initialize all 4 voices for every instrument to -1 (silent)
 	for (int i = 0; i < MAX_INSTRUMENTS; i++) {
 		for (int v = 0; v < MAX_VOICES; v++) {
 			track_pos[i][v] = -1;
@@ -460,7 +460,7 @@ int main(void) {
 						last_active_samples[instrument_count - 1] = 0;
 						last_target_samples[instrument_count - 1] = 0;
 
-						// FIX 2: Removed shadowed re-declaration of pixel_ctrl_ptr.
+						//Removed shadowed re-declaration of pixel_ctrl_ptr.
 						// The outer pixel_ctrl_ptr is already in scope and correct.
 						int back  = *(pixel_ctrl_ptr + 1);
 						int other = (back == (int)&Buffer1) ? (int)&Buffer2 : (int)&Buffer1;
@@ -551,7 +551,6 @@ int main(void) {
 					cache_cursor_bg(mouseX, mouseY, other_cache);
 
 				} else if (clickX >= 134 && clickX <= 149 && clickY > 5 && clickY < 16) {
-					// --- SKIP TO START BUTTON ---
 					int back  = *(pixel_ctrl_ptr + 1);
 					int other = (back == (int)&Buffer1) ? (int)&Buffer2 : (int)&Buffer1;
 
@@ -568,19 +567,18 @@ int main(void) {
 					pixel_buffer_start = other;
 					erase_cursor(other_lastX, other_lastY, other_cache);
 					
-					// 1. Reset the playhead and sample timing to absolute zero
-					// 1. Reset the playhead and sample timing to absolute zero
+					//Reset the playhead and sample timing to absolute zero
 					current_tick = 0; 
 					sample_counter = 0;
 					
-					// 2. Silence all currently playing notes so they don't overlap the restart
+					//Silence all currently playing notes so they don't overlap the restart
 					for (int i = 0; i < MAX_INSTRUMENTS; i++) {
 						for (int v = 0; v < MAX_VOICES; v++) {
 							track_pos[i][v] = -1;
 						}
 					}
 					
-					// 3. If it is actively playing, immediately trigger the instruments on step 0
+					//If it is actively playing, immediately trigger the instruments on step 0
 					if (playActive) {
 						for (int i = 0; i < instrument_count; i++) {
 							if (sequencer_grid[i][0]) {
@@ -623,8 +621,7 @@ int main(void) {
 					cache_cursor_bg(mouseX, mouseY, other_cache);
 
 				} else if (clickX > 169 && clickX < 184 && clickY > 5 && clickY < 16) {
-					//recordActive = !recordActive;
-					
+
 					int back  = *(pixel_ctrl_ptr + 1);
 					int other = (back == (int)&Buffer1) ? (int)&Buffer2 : (int)&Buffer1;
 
@@ -761,10 +758,10 @@ int main(void) {
                             }
                         } else if (instrument_types[row] == 1 || instrument_types[row] == 2) {
 							if (sequencer_grid[row][0] == 1) {
-								// 1. Deactivate the sequence step
+								//Deactivate the sequence step
 								sequencer_grid[row][0] = 0;
 								
-								// 2. Clear the audio buffer references
+								//Clear the audio buffer references
 								if (instrument_types[row] == 1) {
 									piano_samples_n = 0;
 									sample_lengths[1] = 0;
@@ -773,7 +770,7 @@ int main(void) {
 									sample_lengths[2] = 0;
 								}
 
-								// 3. Clear the visual bar and restore the background/grid
+								//Clear the visual bar and restore the background/grid
 								int y_start = 30 + (row * 20);
 								int y_end = y_start + 18;
 								
@@ -875,7 +872,7 @@ int main(void) {
 				// Determine if the menu is vertically blocking this specific row
 				int is_menu_blocking = (chooseActive && y_end >= 50 && y_start <= 190);
 
-				// 1. REDRAW BACKGROUND
+				// redraw background
 				if (is_menu_blocking) {
 					fill_area(22, 69, y_start, y_end, 0x0000);   // Left of menu
 					fill_area(251, 319, y_start, y_end, 0x0000); // Right of menu
@@ -883,7 +880,7 @@ int main(void) {
 					fill_area(22, 319, y_start, y_end, 0x0000);  // Full width
 				}
 
-				// 2. REDRAW GRID LINES
+				// redraw grid lines
 				int minor_lines[] = {30, 40, 50, 68, 77, 86, 105, 114, 123, 142, 151, 160, 179, 188, 197, 216, 225, 234, 253, 262, 271, 290, 299, 308};
 				for (int i = 0; i < 24; i++) {
 					// Only draw line if it's NOT inside the menu X-bounds (70-250)
@@ -892,7 +889,7 @@ int main(void) {
 					}
 				}
 
-				// 3. REDRAW MAJOR BARS
+				// redraw major bars
 				int major_lines[] = {59, 96, 133, 170, 207, 244, 281};
 				for (int i = 0; i < 7; i++) {
 					if (!is_menu_blocking || (major_lines[i] < 70 || major_lines[i] > 250)) {
@@ -900,7 +897,7 @@ int main(void) {
 					}
 				}
 
-				// 4. DRAW PROGRESS BAR (Already has your split logic)
+				//draw progress bar
 				if (x_current > 21) {
 					if (is_menu_blocking) {
 						int segment1_end = (x_current < 70) ? x_current : 69;
@@ -911,7 +908,7 @@ int main(void) {
 					}
 				}
 
-				// 5. REDRAW PLAYHEAD (Row-Specific Clipping)
+				// redraw playhead
 				if (playActive && current_tick >= 0) {
 					// Find the center X of the current tick
 					int ph_x = step_x_bounds[current_tick] + (step_x_bounds[current_tick + 1] - step_x_bounds[current_tick]) / 2;
@@ -950,10 +947,10 @@ int main(void) {
 			draw_record_button_inactive();
 		}
 
-		// 4. Playhead delta rendering — per buffer.
+		// Playhead delta rendering — per buffer.
 		// Each buffer erases its own stale tick and draws the current one,
 		// preventing ghost playheads on alternating frames.
-		// NEW — always redraw playhead after progress bar may have wiped it
+		// always redraw playhead after progress bar may have wiped it
 		if (*lastTick_ptr != current_tick) {
 			if (*lastTick_ptr >= 0) erase_playhead(*lastTick_ptr);
 			*lastTick_ptr = current_tick;
@@ -963,15 +960,15 @@ int main(void) {
 			draw_playhead(current_tick, 0xFFFF);
 		}
 		
-		// 5. Cache and draw cursor at current mouse position
+		//Cache and draw cursor at current mouse position
 		cache_cursor_bg(mouseX, mouseY, cache_ptr);
 		draw_cursor(mouseX, mouseY, 0xFFFF);
 
-		// 6. Update this buffer's tracked cursor position
+		//Update this buffer's tracked cursor position
 		*lastX_ptr = mouseX;
 		*lastY_ptr = mouseY;
 
-		// 7. Update hardware and swap buffers
+		//Update hardware and swap buffers
 		update_hardware();
 
 	}
@@ -1050,7 +1047,7 @@ void poll_keyboard() {
 }
 
 void update_audio() {
-    // --- MIC RECORDING PHASE ---
+    //mic recording phase
     if (is_recording_mic) {
         volatile int * audio_ptr = (int *) AUDIO_BASE;
         int fifospace = *(audio_ptr + 1); 
@@ -1072,7 +1069,7 @@ void update_audio() {
 	while (space > 0) {
 		long long mixed_sample = 0;
 
-        // --- Generate Live Piano Audio ---
+        //generate live piano audio
         if (is_recording_piano && piano_samples_n < target_record_samples) {
             int p_sample = 0;
             if (piano_is_playing && piano_current_freq > 0.0) {
@@ -1081,17 +1078,17 @@ void update_audio() {
                 p_sample = (piano_phase < 0.5) ? 10000000 : -10000000;
             }
             piano_samples[piano_samples_n++] = p_sample;
-            mixed_sample += p_sample * 4; // Add to output mix so user hears it live!
+            mixed_sample += p_sample * 4; //output piano so user hears it while playing
         }
 
-		// --- MIXING PHASE ---
+		// audio mixing phase
 		for (int i = 0; i < instrument_count; i++) {
 			int type = instrument_types[i];
 
 			for (int v = 0; v < MAX_VOICES; v++) {
 				if (track_pos[i][v] != -1 && sample_lengths[type] > 0) {
 					if 	(type == 5) {
-						mixed_sample += (sample_pointers[type][track_pos[i][v]] * 3);
+						mixed_sample += (sample_pointers[type][track_pos[i][v]] * 3); // multiply by constants to adjust volume
 					}
 					else if (type == 1){ // make piano louder
 						mixed_sample += (sample_pointers[type][track_pos[i][v]] * 4);
@@ -1120,7 +1117,7 @@ void update_audio() {
 
 		space--;
 
-		// --- 2. SEQUENCER TICK PHASE ---
+		// sequencer tick phase
 		if (playActive) {
 			sample_counter++;
 			int samples_per_step = 120000 / beats_per_minute;
