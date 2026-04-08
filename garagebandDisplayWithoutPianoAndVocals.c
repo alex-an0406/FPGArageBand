@@ -4,7 +4,9 @@
 
 //---------------- GLOBAL CONSTANTS ---------------
 #define PS2_BASE 0xFF200100 // Mouse
+#define PS2_KB_BASE 0xFF200108 // Keyboard port
 #define FRAME_BASE 0xFF203020 // Frame buffers
+#define KEY_BASE   0xFF200050
 
 //Audio I/O Registers
 #define AUDIO_BASE 		0xFF203040
@@ -29,6 +31,8 @@
 #define MAX_VOICES 4
 
 #define METRONOME_NUM_SAMPLES 19654
+#define MAX_RECORD_SAMPLES 240000
+#define MAX_VOCAL_SAMPLES 240000 
 
 // Sprite Icon Sizes
 #define PIANO_ICON_SIZE 25
@@ -75,9 +79,7 @@ short int hihat_menu_bg[HIHAT_MENU_SIZE * HIHAT_MENU_SIZE];
 
 //--------- AUDIO ---------
 int metronome_samples[];
-int piano_samples[1] = {0};
-int vocal_samples[1] = {0};
-/*
+
 // bass drum sample
 //  Audio sample generated from kick_drum.wav
 //  Sample Rate: 8000 Hz, Mono, 32-bit signed
@@ -100,7 +102,20 @@ extern int snare_samples_n;
 
 extern int hihat_samples[];
 extern int hihat_samples_n;
-*/
+
+int piano_samples[MAX_RECORD_SAMPLES] = {0};
+int piano_samples_n = 0;
+
+float note_frequencies[] = { 261.63, 277.18, 293.66, 311.13, 329.63, 349.23, 369.99, 392.00, 415.30, 440.00, 466.16, 493.88, 523.25 };
+volatile float piano_current_freq = 0.0;
+volatile float piano_base_freq = 0.0;
+volatile float piano_phase = 0.0;
+volatile int piano_is_playing = 0;
+int piano_current_playing_code = 0;
+float piano_octave_multiplier = 1.0;
+
+int vocal_samples[MAX_VOCAL_SAMPLES] = {0};
+int vocal_samples_n = 0;
 
 //--------- OTHER ---------
 //Front and back buffers
@@ -109,8 +124,8 @@ short int Buffer1[240][512];
 short int Buffer2[240][512];
 
 // Cursor buffer cache
-int cursor_bg_buffer1[5];
-int cursor_bg_buffer2[5];
+short int cursor_bg_buffer1[25] = {0};
+short int cursor_bg_buffer2[25] = {0};
 
 // Tracking mouse state
 int mouseX = 160;		// X location of the cursor
@@ -122,6 +137,11 @@ int global_clickY = 0;	// Y location of click
 // Global playback state
 int playActive = 0;
 int trashActive = 0;
+int is_recording_mic = 0; 
+int is_recording_piano = 0;
+int is_selecting_track = 0;
+int record_target_row = -1;
+int target_record_samples = 0; 
 int track_pos[MAX_INSTRUMENTS][MAX_VOICES]; // changed to 2D array
 int current_tick = 0;
 int sample_counter = 0;
@@ -134,7 +154,7 @@ int last_drawn_tick = -1;
 // Map the instrument types to arrays
 const int* sample_pointers[6];
 
-int sample_lengths[6] = {0, 1, 1, 1, 1, 1};
+int sample_lengths[6] = {0, 0, 0, 0, 0, 0};
 int sequencer_grid[MAX_INSTRUMENTS][NUM_STEPS] = {0};
 
 const int step_x_bounds[NUM_STEPS + 1] = {
@@ -203,9 +223,6 @@ static const int digits[10][5] = {
 	{0b111, 0b101, 0b111, 0b001, 0b111}   // 9
 };
 
-// Cursor Pixel Cache [Center, Right, Left, Down, Up]
-short int cursor_bg[5] = {0, 0, 0, 0, 0}; //WILL PROB DELETE SOON
-
 //------------- FUNCTION DECLARATIONS -------------
 
 // Basic single pixel functions
@@ -241,10 +258,11 @@ void update_left_menu();
 void init_mouse();
 void clear_ps2();
 void poll_mouse();
+void poll_keys();
+void poll_keyboard();
 void draw_cursor(int x, int y, short int color);
-int* get_current_cache();
-void erase_cursor(int x, int y, int cursor_bg[]);
-void cache_cursor_bg(int x, int y, int cursor_bg[]);
+void erase_cursor(int x, int y, short int cursor_bg[]);
+void cache_cursor_bg(int x, int y, short int cursor_bg[]);
 
 void swap(int* x, int* y);
 void update_audio();
@@ -252,6 +270,7 @@ void update_hardware();
 void play_audio(const int audio_sample[], int num_of_samples);
 double find_seconds_per_bar(int bpm);
 void count_bars(int bpm, int bars, int continuous, int* stop);
+void record_vocal_track(int num_bars, int bpm);
 
 // Add/remove instrument
 void draw_instrument_label(int type, int y);
@@ -298,10 +317,12 @@ int main(void) {
 	int recordActive = 0;
 	int chooseActive = 0;
 	
+	AUDIO_CTRL = 0xC;
+    AUDIO_CTRL = 0x0;
+
 	int stop = 0;
 	int* stop_ptr = &stop;
-
-	/*
+	
 	sample_pointers[0] = NULL;
 	sample_pointers[1] = piano_samples;
 	sample_pointers[2] = vocal_samples;
@@ -309,10 +330,11 @@ int main(void) {
 	sample_pointers[4] = snare_samples;
 	sample_pointers[5] = bass_samples;
 
+	sample_lengths[2] = vocal_samples_n;
 	sample_lengths[3] = hihat_samples_n;
 	sample_lengths[4] = snare_samples_n;
 	sample_lengths[5] = bass_samples_n;
-	*/
+	
 
 	// CHANGED: Nested loop to initialize all 4 voices for every instrument to -1 (silent)
 	for (int i = 0; i < MAX_INSTRUMENTS; i++) {
@@ -326,9 +348,7 @@ int main(void) {
 	
 	//draw to first buffer
     draw_main_screen(recordActive, chooseActive);
-
-	int *current_cache = get_current_cache();
-    cache_cursor_bg(mouseX, mouseY, current_cache);
+    cache_cursor_bg(mouseX, mouseY, cursor_bg_buffer1);
     draw_cursor(mouseX, mouseY, 0xFFFF);
 	
 	wait_for_vsync(); 
@@ -336,38 +356,45 @@ int main(void) {
 
 	//draw to next buffer
 	draw_main_screen(recordActive, chooseActive);
-	
-	current_cache = get_current_cache();
-    cache_cursor_bg(mouseX, mouseY, current_cache);
+    cache_cursor_bg(mouseX, mouseY, cursor_bg_buffer2);
     draw_cursor(mouseX, mouseY, 0xFFFF);
 
-	wait_for_vsync(); 
-	
 	int prevMouseX1 = 160, prevMouseY1 = 120;  
-	int prevMouseX2 = 160, prevMouseY2 = 120; 
+	int prevMouseX2 = 160, prevMouseY2 = 120;
+
+	// Per-buffer playhead tick trackers, same pattern as cursor position.
+	// Each buffer independently tracks the last tick it drew so we erase+redraw
+	// on the correct buffer every frame rather than ghosting on alternating frames.
+	int last_drawn_tick1 = -1;
+	int last_drawn_tick2 = -1;
 	
 	while (1) {
+		wait_for_vsync(); 
+		
 		pixel_buffer_start = *(pixel_ctrl_ptr + 1);
 
-		current_cache = get_current_cache();
 		int *lastX_ptr, *lastY_ptr;
+		int *lastTick_ptr;
+		short int *cache_ptr;
 
-		// Point to the coordinate trackers for this specific buffer
+		// Point to the coordinate and tick trackers for this specific buffer
 		if (pixel_buffer_start == (int)&Buffer1) {
-			lastX_ptr = &prevMouseX1;
-			lastY_ptr = &prevMouseY1;
+			lastX_ptr    = &prevMouseX1;
+			lastY_ptr    = &prevMouseY1;
+			lastTick_ptr = &last_drawn_tick1;
+			cache_ptr 	 = cursor_bg_buffer1;
 		} else {
-			lastX_ptr = &prevMouseX2;
-			lastY_ptr = &prevMouseY2;
+			lastX_ptr    = &prevMouseX2;
+			lastY_ptr    = &prevMouseY2;
+			lastTick_ptr = &last_drawn_tick2;
+			cache_ptr 	 = cursor_bg_buffer2;
 		}
 
-		// 1. Erase cursor at this buffer's last known position
-		erase_cursor(*lastX_ptr, *lastY_ptr, current_cache);
-
-		// 2. Poll mouse and handle clicks
+		// Erase cursor at this buffer's last known position
+		erase_cursor(*lastX_ptr, *lastY_ptr, cache_ptr);
 		poll_mouse();
 
-		// 3. Handle click events
+		// Handle click events
 		if (global_clicked) {
 			int clickX = global_clickX;
 			int clickY = global_clickY;
@@ -377,21 +404,27 @@ int main(void) {
 				int selected = 0;
 
 				if (clickX > 108 && clickX < 158 && clickY > 74 && clickY < 123) {
-					choose_piano(); selected = 1;
+					choose_piano(); 
+					selected = 1;
 				} else if (clickX > 161 && clickX < 211 && clickY > 74 && clickY < 123) {
-					choose_vocal(); selected = 1;
+					choose_vocal(); 
+					selected = 1;
 				} else if (clickX > 82 && clickX < 132 && clickY > 129 && clickY < 178) {
-					choose_hihat(); selected = 1;
+					choose_hihat(); 
+					selected = 1;
 				} else if (clickX > 135 && clickX < 185 && clickY > 129 && clickY < 178) {
-					choose_snare(); selected = 1;
+					choose_snare(); 
+					selected = 1;
 				} else if (clickX > 188 && clickX < 238 && clickY > 129 && clickY < 178) {
-					choose_bass(); selected = 1;
+					choose_bass(); 
+					selected = 1;
 				} else if (clickX > 0 && clickX < 21 && clickY > new_instrument_location_y1 && clickY < new_instrument_location_y2) {
 					selected = 1;
 				}
 
 				if (selected) {
 					chooseActive = 0;
+						
 					erase_menu();
 					update_left_menu();
 				}
@@ -400,8 +433,29 @@ int main(void) {
 				// clicking the trash icon again turns off remove mode
 				if (clickX >= 7 && clickX <= 15 && clickY >= 5 && clickY <= 18) {
 					trashActive = 0;
-					draw_to_both(0, 20, 0, 20, 0x39E7);
+
+					int back  = *(pixel_ctrl_ptr + 1);
+					int other = (back == (int)&Buffer1) ? (int)&Buffer2 : (int)&Buffer1;
+
+					short int *back_cache  = (back  == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
+					short int *other_cache = (other == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
+
+					int back_lastX = (back  == (int)&Buffer1) ? prevMouseX1 : prevMouseX2;
+					int back_lastY = (back  == (int)&Buffer1) ? prevMouseY1 : prevMouseY2;
+					int other_lastX = (other  == (int)&Buffer1) ? prevMouseX1 : prevMouseX2;
+					int other_lastY = (other  == (int)&Buffer1) ? prevMouseY1 : prevMouseY2;
+					
+					pixel_buffer_start = back;
+					erase_cursor(back_lastX, back_lastY, back_cache);
+					pixel_buffer_start = other;
+					erase_cursor(other_lastX, other_lastY, other_cache);
+						
 					draw_trash_both(0x041F, 0x0010);
+
+					pixel_buffer_start = back;
+					cache_cursor_bg(mouseX, mouseY, back_cache);
+					pixel_buffer_start = other;
+					cache_cursor_bg(mouseX, mouseY, other_cache);
 
 				// clicking an instrument row removes it
 				} else if (clickX > 0 && clickX < 21 && clickY > 29 && instrument_count > 0) {
@@ -409,19 +463,25 @@ int main(void) {
 					if (row >= 0 && row < instrument_count) {
 						remove_instrument_at(row);
 
-						volatile int *pixel_ctrl_ptr = (int *)FRAME_BASE;
-						int back = *(pixel_ctrl_ptr + 1);
+						// FIX 2: Removed shadowed re-declaration of pixel_ctrl_ptr.
+						// The outer pixel_ctrl_ptr is already in scope and correct.
+						int back  = *(pixel_ctrl_ptr + 1);
 						int other = (back == (int)&Buffer1) ? (int)&Buffer2 : (int)&Buffer1;
-						int *back_cache  = (back  == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
-						int *other_cache = (other == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
 
-						// erase cursor on both buffers before any drawing
+						short int *back_cache  = (back  == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
+						short int *other_cache = (other == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
+
+						int back_lastX = (back  == (int)&Buffer1) ? prevMouseX1 : prevMouseX2;
+						int back_lastY = (back  == (int)&Buffer1) ? prevMouseY1 : prevMouseY2;
+						int other_lastX = (other  == (int)&Buffer1) ? prevMouseX1 : prevMouseX2;
+						int other_lastY = (other  == (int)&Buffer1) ? prevMouseY1 : prevMouseY2;
+						
 						pixel_buffer_start = back;
-						erase_cursor(mouseX, mouseY, back_cache);
+						erase_cursor(back_lastX, back_lastY, back_cache);
 						pixel_buffer_start = other;
-						erase_cursor(mouseX, mouseY, other_cache);
+						erase_cursor(other_lastX, other_lastY, other_cache);
 
-						// redraw sequencer grid area on both buffers
+						// Redraw sequencer grid area on both buffers
 						for (int buf = 0; buf < 2; buf++) {
 							pixel_buffer_start = (buf == 0) ? back : other;
 
@@ -451,9 +511,11 @@ int main(void) {
 							}
 						}
 
-						// update_left_menu draws to both buffers internally
+						// update_left_menu draws to both buffers internally.
+						// Restore pixel_buffer_start to back before calling it so
+						// its internal buffer-selection logic has a consistent starting state.
 						update_left_menu();
-
+						
 						// re-cache cursor on both buffers after all drawing is done
 						pixel_buffer_start = back;
 						cache_cursor_bg(mouseX, mouseY, back_cache);
@@ -464,22 +526,132 @@ int main(void) {
 					}
 				}
 			} else {
-				// trash icon click — enter remove mode
+				// trash icon click, enter remove mode
 				if (clickX >= 7 && clickX <= 15 && clickY >= 5 && clickY <= 18) {
 					trashActive = 1;
-					draw_to_both(0, 20, 0, 20, 0x39E7);
+
+					int back  = *(pixel_ctrl_ptr + 1);
+					int other = (back == (int)&Buffer1) ? (int)&Buffer2 : (int)&Buffer1;
+
+					short int *back_cache  = (back  == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
+					short int *other_cache = (other == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
+
+					int back_lastX = (back  == (int)&Buffer1) ? prevMouseX1 : prevMouseX2;
+					int back_lastY = (back  == (int)&Buffer1) ? prevMouseY1 : prevMouseY2;
+					int other_lastX = (other  == (int)&Buffer1) ? prevMouseX1 : prevMouseX2;
+					int other_lastY = (other  == (int)&Buffer1) ? prevMouseY1 : prevMouseY2;
+					
+					pixel_buffer_start = back;
+					erase_cursor(back_lastX, back_lastY, back_cache);
+					pixel_buffer_start = other;
+					erase_cursor(other_lastX, other_lastY, other_cache);
+						
 					draw_trash_both(0xF800, 0x8800);
+
+					pixel_buffer_start = back;
+					cache_cursor_bg(mouseX, mouseY, back_cache);
+					pixel_buffer_start = other;
+					cache_cursor_bg(mouseX, mouseY, other_cache);
 
 				} else if (clickX > 149 && clickX < 169 && clickY > 5 && clickY < 16) {
 					playActive = !playActive;
-					if (playActive)
+					int back  = *(pixel_ctrl_ptr + 1);
+					int other = (back == (int)&Buffer1) ? (int)&Buffer2 : (int)&Buffer1;
+
+					short int *back_cache  = (back  == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
+					short int *other_cache = (other == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
+
+					int back_lastX = (back  == (int)&Buffer1) ? prevMouseX1 : prevMouseX2;
+					int back_lastY = (back  == (int)&Buffer1) ? prevMouseY1 : prevMouseY2;
+					int other_lastX = (other  == (int)&Buffer1) ? prevMouseX1 : prevMouseX2;
+					int other_lastY = (other  == (int)&Buffer1) ? prevMouseY1 : prevMouseY2;
+					
+					pixel_buffer_start = back;
+					erase_cursor(back_lastX, back_lastY, back_cache);
+					pixel_buffer_start = other;
+					erase_cursor(other_lastX, other_lastY, other_cache);
+						
+					if (playActive) {
+                        current_tick = 0; 
+                        sample_counter = 0;
+                        for (int i = 0; i < instrument_count; i++) {
+                            if (sequencer_grid[i][0]) track_pos[i][0] = 0; 
+                        }
 						draw_play_button_green();
-					else
+                    } else {
 						draw_play_button_gray();
+                    }
+
+					pixel_buffer_start = back;
+					cache_cursor_bg(mouseX, mouseY, back_cache);
+					pixel_buffer_start = other;
+					cache_cursor_bg(mouseX, mouseY, other_cache);
 
 				} else if (clickX > 169 && clickX < 184 && clickY > 5 && clickY < 16) {
-					recordActive = !recordActive;
+					//recordActive = !recordActive;
+					
+					int back  = *(pixel_ctrl_ptr + 1);
+					int other = (back == (int)&Buffer1) ? (int)&Buffer2 : (int)&Buffer1;
 
+					short int *back_cache  = (back  == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
+					short int *other_cache = (other == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
+
+					int back_lastX = (back  == (int)&Buffer1) ? prevMouseX1 : prevMouseX2;
+					int back_lastY = (back  == (int)&Buffer1) ? prevMouseY1 : prevMouseY2;
+					int other_lastX = (other  == (int)&Buffer1) ? prevMouseX1 : prevMouseX2;
+					int other_lastY = (other  == (int)&Buffer1) ? prevMouseY1 : prevMouseY2;
+					
+					pixel_buffer_start = back;
+					erase_cursor(back_lastX, back_lastY, back_cache);
+					pixel_buffer_start = other;
+					erase_cursor(other_lastX, other_lastY, other_cache);
+					
+					if (is_recording_mic || is_recording_piano || is_selecting_track) {
+                        // Stop all recording processes
+                        if (is_recording_mic) sample_lengths[2] = vocal_samples_n; 
+                        if (is_recording_piano) sample_lengths[1] = piano_samples_n;
+                        
+                        if (record_target_row != -1) {
+                            sequencer_grid[record_target_row][0] = 1;
+                            draw_to_both(step_x_bounds[0]+1, step_x_bounds[1]-1, 30+(record_target_row*20), 30+(record_target_row*20)+18, 0x07E0);
+                        }
+                        
+                        is_recording_mic = 0;
+                        is_recording_piano = 0;
+                        is_selecting_track = 0;
+                        record_target_row = -1;
+                        draw_record_button_inactive();
+                    } else {
+                        // Start track selection
+                        int rec_tracks = 0;
+                        int last_rec_row = -1;
+                        for (int r = 0; r < instrument_count; r++) {
+                            if (instrument_types[r] == 1 || instrument_types[r] == 2) {
+                                rec_tracks++;
+                                last_rec_row = r;
+                            }
+                        }
+                        
+                        if (rec_tracks == 1) {
+                            is_selecting_track = 1; 
+                            global_clickX = 100; global_clickY = 35 + (last_rec_row * 20); global_clicked = 1; 
+                        } else if (rec_tracks > 1) {
+                            is_selecting_track = 1;
+                            
+                            volatile int *pixel_ctrl_ptr = (int *)FRAME_BASE;
+                            int back = *(pixel_ctrl_ptr + 1);
+                            int other = (back == (int)&Buffer1) ? (int)&Buffer2 : (int)&Buffer1;
+                            for (int buf = 0; buf < 2; buf++) {
+                                pixel_buffer_start = (buf == 0) ? back : other;
+                                fill_area(170, 184, 5, 16, 0xFFE0); // Yellow to signify selection
+                                draw_circle(177, 10, 3, 0xF800);
+                                fill_shape(177 - 3, 10 - 3, 177 + 3, 10 + 3, 0xF800, 0xF800);
+                            }
+                            pixel_buffer_start = back;
+                        }
+                    }
+
+					/*
 					if (recordActive) {
 						draw_record_button_active();
 						wait_for_vsync();
@@ -487,66 +659,199 @@ int main(void) {
 						count_bars(beats_per_minute, 13, 0, stop_ptr);
 						draw_record_button_inactive();
 						recordActive = !recordActive;
-					}
+					}*/
 
-					prevMouseX1 = mouseX; prevMouseY1 = mouseY;
-					prevMouseX2 = mouseX; prevMouseY2 = mouseY;
+					pixel_buffer_start = back;
+					cache_cursor_bg(mouseX, mouseY, back_cache);
+					pixel_buffer_start = other;
+					cache_cursor_bg(mouseX, mouseY, other_cache);
 
 				} else if (clickX > 0 && clickX < 21 && clickY > new_instrument_location_y1 && clickY < new_instrument_location_y2) {
 					chooseActive = 1;
-					choose_instrument();
+					int back  = *(pixel_ctrl_ptr + 1);
+					int other = (back == (int)&Buffer1) ? (int)&Buffer2 : (int)&Buffer1;
+
+					short int *back_cache  = (back  == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
+					short int *other_cache = (other == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
+
+					int back_lastX = (back  == (int)&Buffer1) ? prevMouseX1 : prevMouseX2;
+					int back_lastY = (back  == (int)&Buffer1) ? prevMouseY1 : prevMouseY2;
+					int other_lastX = (other  == (int)&Buffer1) ? prevMouseX1 : prevMouseX2;
+					int other_lastY = (other  == (int)&Buffer1) ? prevMouseY1 : prevMouseY2;
+					
+					pixel_buffer_start = back;
+					erase_cursor(back_lastX, back_lastY, back_cache);
+					pixel_buffer_start = other;
+					erase_cursor(other_lastX, other_lastY, other_cache);
+
+					choose_instrument(); 
+					
+					pixel_buffer_start = back;
+					cache_cursor_bg(mouseX, mouseY, back_cache);
+					pixel_buffer_start = other;
+					cache_cursor_bg(mouseX, mouseY, other_cache);
 
 				} else if (clickX > 21 && clickX < 319 && clickY > 29) {
+					int back  = *(pixel_ctrl_ptr + 1);
+					int other = (back == (int)&Buffer1) ? (int)&Buffer2 : (int)&Buffer1;
+
+					short int *back_cache  = (back  == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
+					short int *other_cache = (other == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
+
+					int back_lastX = (back  == (int)&Buffer1) ? prevMouseX1 : prevMouseX2;
+					int back_lastY = (back  == (int)&Buffer1) ? prevMouseY1 : prevMouseY2;
+					int other_lastX = (other  == (int)&Buffer1) ? prevMouseX1 : prevMouseX2;
+					int other_lastY = (other  == (int)&Buffer1) ? prevMouseY1 : prevMouseY2;
+					
+					pixel_buffer_start = back;
+					erase_cursor(back_lastX, back_lastY, back_cache);
+					pixel_buffer_start = other;
+					erase_cursor(other_lastX, other_lastY, other_cache);
+
 					int row = (clickY - 30) / 20;
 
-					if (row < MAX_INSTRUMENTS && row < instrument_count &&
-						instrument_types[row] > 2) {
-						int col = -1;
-						for (int i = 0; i < NUM_STEPS; i++) {
-							if (clickX >= step_x_bounds[i] && clickX < step_x_bounds[i + 1]) {
-								col = i;
-								break;
-							}
-						}
+					if (row < MAX_INSTRUMENTS && row < instrument_count) {
+                        if (is_selecting_track) {
+                            if (instrument_types[row] == 1 || instrument_types[row] == 2) {
+                                is_selecting_track = 0;
+                                record_target_row = row;
+                                target_record_samples = (int)(4.0 * 4.0 * (60.0 / beats_per_minute) * 8000.0);
+                                
+                                if (instrument_types[row] == 1) {
+                                    if (target_record_samples > MAX_RECORD_SAMPLES) target_record_samples = MAX_RECORD_SAMPLES;
+                                    piano_samples_n = 0;
+                                    piano_phase = 0.0;
+                                    is_recording_piano = 1;
+                                } else if (instrument_types[row] == 2) {
+                                    if (target_record_samples > MAX_VOCAL_SAMPLES) target_record_samples = MAX_VOCAL_SAMPLES;
+                                    vocal_samples_n = 0;
+                                    is_recording_mic = 1;
+                                    volatile int * audio_ptr = (int *) AUDIO_BASE;
+                                    while (((*(audio_ptr + 1) >> 8) & 0xFF) > 0 && (*(audio_ptr + 1) & 0xFF) > 0) {
+                                        (void)*(audio_ptr + 2);
+                                        (void)*(audio_ptr + 3);
+                                    }
+                                }
+                                draw_record_button_active();
+                            }
+                        } else if (instrument_types[row] == 1 || instrument_types[row] == 2) {
+                            int sample_count_val = (instrument_types[row] == 1) ? piano_samples_n : vocal_samples_n;
+                            if (sample_count_val > 0) {
+                                if (instrument_types[row] == 1) {
+                                    piano_samples_n = 0;
+                                    sample_lengths[1] = 0;
+                                } else {
+                                    vocal_samples_n = 0;
+                                    sample_lengths[2] = 0;
+                                }
+                                for (int c = 0; c < NUM_STEPS; c++) sequencer_grid[row][c] = 0;
+                                
+                                int y_start = 30 + (row * 20);
+                                int y_end   = y_start + 18;
+                                
+                                draw_to_both(21, 319, y_start, y_end, 0x0841);
+                                
+                                volatile int *pixel_ctrl_ptr = (int *)FRAME_BASE;
+                                int back = *(pixel_ctrl_ptr + 1);
+                                int other = (back == (int)&Buffer1) ? (int)&Buffer2 : (int)&Buffer1;
+                                for (int buf = 0; buf < 2; buf++) {
+                                    pixel_buffer_start = (buf == 0) ? back : other;
+                                    int major_lines[] = {59, 96, 133, 170, 207, 244, 281};
+                                    for (int i = 0; i < 7; i++) draw_line(major_lines[i], y_start, major_lines[i], y_end, 0x2104);
+                                    int minor_lines[] = {30, 40, 50, 68, 77, 86, 105, 114, 123, 142, 151, 160, 179, 188, 197, 216, 225, 234, 253, 262, 271, 290, 299, 308};
+                                    for (int i = 0; i < 24; i++) draw_line(minor_lines[i], y_start, minor_lines[i], y_end, 0x1082);
+                                }
+                                pixel_buffer_start = back;
+                            }
+                        } else if (instrument_types[row] > 2) {
+                            int col = -1;
+                            for (int i = 0; i < NUM_STEPS; i++) {
+                                if (clickX >= step_x_bounds[i] && clickX < step_x_bounds[i + 1]) {
+                                    col = i;
+                                    break;
+                                }
+                            }
 
-						if (col != -1) {
-							sequencer_grid[row][col] = !sequencer_grid[row][col];
-							int x_start = step_x_bounds[col] + 1;
-							int x_end   = step_x_bounds[col + 1] - 1;
-							int y_start = 30 + (row * 20);
-							int y_end   = y_start + 18;
+                            if (col != -1) {
+                                sequencer_grid[row][col] = !sequencer_grid[row][col];
+                                int x_start = step_x_bounds[col] + 1;
+                                int x_end   = step_x_bounds[col + 1] - 1;
+                                int y_start = 30 + (row * 20);
+                                int y_end   = y_start + 18;
 
-							if (y_end < 240) {
-								if (sequencer_grid[row][col] == 1) {
-									draw_to_both(x_start, x_end, y_start, y_end, 0x881F);
-									int voice_found = 0;
-									for (int v = 0; v < MAX_VOICES; v++) {
-										if (track_pos[row][v] == -1) {
-											track_pos[row][v] = 0;
-											voice_found = 1;
-											break;
-										}
-									}
-									if (!voice_found) track_pos[row][0] = 0;
-								} else {
-									draw_to_both(x_start, x_end, y_start, y_end, 0x0841);
-								}
-							}
-						}
+                                if (y_end < 240) {
+                                    if (sequencer_grid[row][col] == 1) {
+                                        draw_to_both(x_start, x_end, y_start, y_end, 0x881F);
+                                        int voice_found = 0;
+                                        for (int v = 0; v < MAX_VOICES; v++) {
+                                            if (track_pos[row][v] == -1) {
+                                                track_pos[row][v] = 0;
+                                                voice_found = 1;
+                                                break;
+                                            }
+                                        }
+                                        if (!voice_found) track_pos[row][0] = 0;
+                                    } else {
+                                        draw_to_both(x_start, x_end, y_start, y_end, 0x0841);
+                                    }
+                                }
+                            }
+                        }
 					}
+					
+					pixel_buffer_start = back;
+					cache_cursor_bg(mouseX, mouseY, back_cache);
+					pixel_buffer_start = other;
+					cache_cursor_bg(mouseX, mouseY, other_cache);
 				}
 			}
 		}
 
-		// 4. Playhead delta rendering
-		if (last_drawn_tick != current_tick) {
-			if (last_drawn_tick >= 0) erase_playhead(last_drawn_tick);
+		// 4. Playhead delta rendering — per buffer.
+		// Each buffer erases its own stale tick and draws the current one,
+		// preventing ghost playheads on alternating frames.
+		if (*lastTick_ptr != current_tick) {
+			if (*lastTick_ptr >= 0) erase_playhead(*lastTick_ptr);
 			if (playActive) draw_playhead(current_tick, 0xFFFF);
-			last_drawn_tick = current_tick;
+			*lastTick_ptr = current_tick;
 		}
 
+        // Render Progress Bar 
+		if (is_recording_mic || is_recording_piano) {
+            if (record_target_row != -1) {
+                int active_samples = is_recording_mic ? vocal_samples_n : piano_samples_n;
+                int x_current = 21 + (int)(((float)active_samples / target_record_samples) * 298.0);
+                if (x_current > 319) x_current = 319;
+                
+                int y_start = 30 + (record_target_row * 20);
+                int y_end = y_start + 18;
+                
+                if (x_current > 21 && y_end < 240) {
+                    fill_area(21, x_current, y_start, y_end, 0x07E0); 
+                }
+            }
+        }
+        
+        // Auto Stop Recording
+        int active_samples = is_recording_mic ? vocal_samples_n : piano_samples_n;
+        if ((is_recording_mic || is_recording_piano) && active_samples >= target_record_samples) {
+            if (is_recording_mic) sample_lengths[2] = vocal_samples_n; 
+            if (is_recording_piano) sample_lengths[1] = piano_samples_n;
+
+            if (record_target_row != -1) {
+                sequencer_grid[record_target_row][0] = 1;
+                draw_to_both(step_x_bounds[0]+1, step_x_bounds[1]-1, 30+(record_target_row*20), 30+(record_target_row*20)+18, 0x07E0);
+            }
+
+            is_recording_mic = 0;
+            is_recording_piano = 0;
+            record_target_row = -1;
+
+            draw_record_button_inactive();
+        }
+
 		// 5. Cache and draw cursor at current mouse position
-		cache_cursor_bg(mouseX, mouseY, current_cache);
+		cache_cursor_bg(mouseX, mouseY, cache_ptr);
 		draw_cursor(mouseX, mouseY, 0xFFFF);
 
 		// 6. Update this buffer's tracked cursor position
@@ -555,17 +860,98 @@ int main(void) {
 
 		// 7. Update hardware and swap buffers
 		update_hardware();
-		wait_for_vsync();
+
 	}
 }
 
 //------------ HARDWARE SYNCHRONIZATION FUNCTIONS ---------------
 void update_hardware() {
 	update_audio();
-	poll_mouse();
+    poll_keyboard();
+    poll_keys();
+}
+
+void poll_keys() {
+    volatile int * key_ptr = (int *) KEY_BASE;
+    int current_key_state = *key_ptr;
+    static int last_key_state = 0;
+    
+    if ((current_key_state & 0x1) && !(last_key_state & 0x1)) {
+        piano_octave_multiplier *= 0.5;
+        piano_current_freq = piano_base_freq * piano_octave_multiplier;
+    }
+    if ((current_key_state & 0x2) && !(last_key_state & 0x2)) {
+        if (piano_octave_multiplier < 8.0) {
+            piano_octave_multiplier *= 2.0;
+            piano_current_freq = piano_base_freq * piano_octave_multiplier;
+        }
+    }
+    last_key_state = current_key_state;
+}
+
+void poll_keyboard() {
+    volatile int* ps2_kb_ptr = (int*)PS2_KB_BASE;
+    int data;
+    static int piano_break_code = 0;
+    
+    while (1) {
+        data = *ps2_kb_ptr;
+        if ((data & 0x8000) == 0) return;
+        
+        unsigned char code = data & 0xFF;
+        if (code == 0xE0) continue;
+        
+        if (code == 0xF0) {
+            piano_break_code = 1;
+        } else {
+            if (piano_break_code) {
+                if (code == piano_current_playing_code) {
+                    piano_is_playing = 0;
+                    piano_current_playing_code = 0;
+                }
+                piano_break_code = 0;
+            } else {
+                if (code != piano_current_playing_code) {
+                    piano_is_playing = 1;
+                    piano_current_playing_code = code;
+                    
+                    if (code == 0x1C)      piano_base_freq = note_frequencies[0];  // A
+                    else if (code == 0x1D) piano_base_freq = note_frequencies[1];  // W
+                    else if (code == 0x1B) piano_base_freq = note_frequencies[2];  // S
+                    else if (code == 0x24) piano_base_freq = note_frequencies[3];  // E
+                    else if (code == 0x23) piano_base_freq = note_frequencies[4];  // D
+                    else if (code == 0x2B) piano_base_freq = note_frequencies[5];  // F
+                    else if (code == 0x2C) piano_base_freq = note_frequencies[6];  // T
+                    else if (code == 0x34) piano_base_freq = note_frequencies[7];  // G
+                    else if (code == 0x35) piano_base_freq = note_frequencies[8];  // Y
+                    else if (code == 0x33) piano_base_freq = note_frequencies[9];  // H
+                    else if (code == 0x3C) piano_base_freq = note_frequencies[10]; // U
+                    else if (code == 0x3B) piano_base_freq = note_frequencies[11]; // J
+                    else if (code == 0x42) piano_base_freq = note_frequencies[12]; // K
+                    
+                    piano_current_freq = piano_base_freq * piano_octave_multiplier;
+                }
+            }
+        }
+    }
 }
 
 void update_audio() {
+    // --- 1. MIC RECORDING PHASE ---
+    if (is_recording_mic) {
+        volatile int * audio_ptr = (int *) AUDIO_BASE;
+        int fifospace = *(audio_ptr + 1); 
+        int rarc = (fifospace >> 8) & 0xFF;
+
+        while (rarc > 0 && vocal_samples_n < target_record_samples) {
+            int left = *(audio_ptr + 2);
+            (void)*(audio_ptr + 3);
+            vocal_samples[vocal_samples_n] = left; 
+            vocal_samples_n++;
+            rarc--;
+        }
+    }
+
 	int left_space = (AUDIO_FIFOSPACE >> 24) & 0xFF;
 	int right_space = (AUDIO_FIFOSPACE >> 16) & 0xFF;
 	int space = (left_space < right_space) ? left_space : right_space;
@@ -573,19 +959,27 @@ void update_audio() {
 	while (space > 0) {
 		long long mixed_sample = 0;
 
+        // --- Generate Live Piano Audio ---
+        if (is_recording_piano && piano_samples_n < target_record_samples) {
+            int p_sample = 0;
+            if (piano_is_playing && piano_current_freq > 0.0) {
+                piano_phase += (piano_current_freq / 8000.0);
+                if (piano_phase >= 1.0) piano_phase -= 1.0;
+                p_sample = (piano_phase < 0.5) ? 10000000 : -10000000;
+            }
+            piano_samples[piano_samples_n++] = p_sample;
+            mixed_sample += p_sample; // Add to output mix so user hears it live!
+        }
+
 		// --- 1. MIXING PHASE ---
 		for (int i = 0; i < instrument_count; i++) {
 			int type = instrument_types[i];
 
-			// Loop through all 4 possible voices for this specific instrument
 			for (int v = 0; v < MAX_VOICES; v++) {
 				if (track_pos[i][v] != -1 && sample_lengths[type] > 0) {
-
-					// Add the amplitude of this specific voice to the total mix
 					mixed_sample += (sample_pointers[type][track_pos[i][v]] * VOLUME_MULTIPLIER);
 					track_pos[i][v]++;
 
-					// If this voice reaches the end of the array, turn it off (-1)
 					if (track_pos[i][v] >= sample_lengths[type]) {
 						track_pos[i][v] = -1; 
 					}
@@ -613,19 +1007,15 @@ void update_audio() {
 
 				for (int i = 0; i < instrument_count; i++) {
 					if (sequencer_grid[i][current_tick]) {
-
-						// A note was triggered! Try to find a free voice (-1)
 						int voice_found = 0;
 						for (int v = 0; v < MAX_VOICES; v++) {
 							if (track_pos[i][v] == -1) {
 								track_pos[i][v] = 0; // Trigger the sample here
 								voice_found = 1;
-								break; // Stop looking immediately so we don't trigger all 4 at once
+								break; 
 							}
 						}
 
-						// VOICE STEALING: If all 4 voices are currently busy playing tails,
-						// we must forcefully overwrite the oldest one so the new beat is heard.
 						if (!voice_found) {
 							int oldest_voice = 0;
 							int max_pos = -1;
@@ -635,10 +1025,8 @@ void update_audio() {
 									oldest_voice = v;
 								}
 							}
-							// Reset the oldest tail back to the beginning of the sample
 							track_pos[i][oldest_voice] = 0; 
 						}
-
 					}
 				}
 			}
@@ -724,9 +1112,9 @@ void erase_playhead(int tick) {
 		short int restore_color = 0x0841;
 		if (y >= 30) {
 			int row = (y - 30) / 20;
-			if (row >= 0 && row < instrument_count &&
-				sequencer_grid[row][tick] == 1) {
-				restore_color = 0x07E0;
+			int offset = (y - 30) % 20;
+			if (row >= 0 && row < instrument_count && sequencer_grid[row][tick] == 1) {
+				if (offset >= 0 && offset < 19) {restore_color = 0x881F;}
 			}
 		}
 		plot_pixel_both(x, y, restore_color);
@@ -734,38 +1122,32 @@ void erase_playhead(int tick) {
 }
 
 //------------ DRAWING FUNCTIONS ---------------
-int* get_current_cache() {
-    volatile int * pixel_ctrl_ptr = (int *)FRAME_BASE;
-    // We check the BACK BUFFER address (pixel_ctrl_ptr + 1)
-    if (*(pixel_ctrl_ptr + 1) == (int)&Buffer1) {
-        return cursor_bg_buffer1;
-    } else {
-        return cursor_bg_buffer2;
+
+void cache_cursor_bg(int x, int y, short int cursor_bg[]) {
+    if (x > 0 && x < 319 && y > 0 && y < 239) {
+        int i = 0;
+        for (int dy = -2; dy <= 2; dy++) {
+            for (int dx = -2; dx <= 2; dx++) {
+                cursor_bg[i++] = get_pixel(x + dx, y + dy);
+            }
+        }
     }
 }
 
-void cache_cursor_bg(int x, int y, int cursor_bg[]) {
-	if (x + 1 < 320 && y < 240 && x - 1 >= 0 && y - 1 >= 0) {
-		cursor_bg[0] = get_pixel(x, y);
-		cursor_bg[1] = get_pixel(x + 1, y);
-		cursor_bg[2] = get_pixel(x - 1, y);
-		cursor_bg[3] = get_pixel(x, y + 1);
-		cursor_bg[4] = get_pixel(x, y - 1);
-	}
+void erase_cursor(int x, int y, short int cursor_bg[]) {
+    if (x > 0 && x < 319 && y > 0 && y < 239) {
+        int i = 0;
+        for (int dy = -2; dy <= 2; dy++) {
+            for (int dx = -2; dx <= 2; dx++) {
+                plot_pixel(x + dx, y + dy, cursor_bg[i++]);
+            }
+        }
+    }
 }
 
-void erase_cursor(int x, int y, int cursor_bg[]) {
-	if (x + 1 < 320 && y < 240 && x - 1 >= 0 && y - 1 >= 0) {
-		plot_pixel(x, y, cursor_bg[0]);
-		plot_pixel(x + 1, y, cursor_bg[1]);
-		plot_pixel(x - 1, y, cursor_bg[2]);
-		plot_pixel(x, y + 1, cursor_bg[3]);
-		plot_pixel(x, y - 1, cursor_bg[4]);
-	}
-}
 
 void draw_cursor(int x, int y, short int color) {
-	if (x + 1 < 320 && y < 240 && x - 1 >= 0 && y - 1 >= 0) {
+	if (x + 1 < 319 && y < 239 && x - 1 >= 0 && y - 1 >= 0) {
 		plot_pixel(x, y, color);
 		plot_pixel(x + 1, y, color);
 		plot_pixel(x - 1, y, color);
@@ -787,12 +1169,12 @@ void erase_menu() {
 
         int major_lines[] = {96, 133, 170, 207, 244};
         for (int i = 0; i < 5; i++)
-            draw_line(major_lines[i], 50, major_lines[i], 190, 0x2104);
+            draw_line(major_lines[i], 50, major_lines[i], 191, 0x2104);
 
         int minor_lines[] = {77, 86, 105, 114, 123, 142, 151,
                              160, 179, 188, 197, 216, 225, 234};
         for (int i = 0; i < 14; i++)
-            draw_line(minor_lines[i], 50, minor_lines[i], 190, 0x1082);
+            draw_line(minor_lines[i], 50, minor_lines[i], 191, 0x1082);
 
         for (int row = 0; row < instrument_count; row++) {
             for (int col = 0; col < NUM_STEPS; col++) {
@@ -802,7 +1184,7 @@ void erase_menu() {
                     int y_start = 30 + (row * 20);
                     int y_end = y_start + 18;
                     if (x_end >= 70 && x_start <= 250 && y_end >= 50 && y_start <= 190) {
-                        fill_area(x_start, x_end, y_start, y_end, 0x07E0);
+                        fill_area(x_start, x_end, y_start, y_end - 1, 0x881F);
                     }
                 }
             }
@@ -821,8 +1203,9 @@ void update_left_menu() {
         pixel_buffer_start = (buf == 0) ? back : other;
 
         // clear entire left panel
-        fill_area(0, 20, 21, 239, 0x39E7);
-        draw_line(21, 21, 21, 239, 0x2104);
+        fill_area(1, 20, 21, 239, 0x39E7);
+		draw_line(0, 0, 0, 239, 0x2104);
+        draw_line(21, 30, 21, 239, 0x2104);
 
         // draw each instrument slot: top border, then sprite
         for (int i = 0; i < instrument_count; i++) {
@@ -838,8 +1221,8 @@ void update_left_menu() {
         // plus zone borders and symbol drawn last
         draw_line(0, new_instrument_location_y1, 21, new_instrument_location_y1, 0x2104);
         draw_line(0, new_instrument_location_y2, 21, new_instrument_location_y2, 0x2104);
-        draw_line(7,  add_instrument_plus_y0, 14, add_instrument_plus_y0, 0xBDF7);
-        draw_line(10, add_instrument_plus_y1, 10, add_instrument_plus_y2, 0xBDF7);
+		draw_line(7, add_instrument_plus_y0, 14, add_instrument_plus_y0, 0xBDF7);
+		draw_line(10, add_instrument_plus_y1, 10, add_instrument_plus_y2, 0xBDF7);
     }
 
     pixel_buffer_start = back;
@@ -1057,8 +1440,8 @@ void draw_to_both(int x_start, int x_end, int y_start, int y_end, short int colo
     volatile int *pixel_ctrl_ptr = (int *)FRAME_BASE;
     int back = *(pixel_ctrl_ptr + 1);
     int other = (back == (int)&Buffer1) ? (int)&Buffer2 : (int)&Buffer1;
-    int *other_cache = (other == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
-    int *back_cache  = (back  == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
+    short int *other_cache = (other == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
+    short int *back_cache  = (back  == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
 
     // draw to back buffer (cursor is already erased here from top of loop)
     pixel_buffer_start = back;
@@ -1206,11 +1589,12 @@ void draw_main_screen(int recordActive, int chooseActive) {
 	draw_line(0, 239, 319, 239, 0x2104);
 	draw_line(0, 0, 0, 239, 0x2104);
 	draw_line(319, 0, 319, 239, 0x2104);
+	draw_line(21, 30, 21, 239, 0x2104);
 	
 	if (trashActive)
-		draw_trash_both(0xF800, 0x8800); // red = active
+		draw_trash(0xF800, 0x8800); // red = active
 	else
-		draw_trash_both(0x041F, 0x0010); // blue = inactive
+		draw_trash(0x041F, 0x0010); // blue = inactive
 
 	//fill in the record, play, skip to start background
 	fill_area(134, 184, 5, 15, 0x2104);
@@ -1241,7 +1625,7 @@ void draw_main_screen(int recordActive, int chooseActive) {
 	draw_line(10, add_instrument_plus_y1, 10, add_instrument_plus_y2, 0xBDF7);
 	
 	//fill in main playing area
-	fill_area(21, 319, 21, 28, 0x1082);
+	fill_area(22, 319, 21, 28, 0x1082);
 
 	//draw large ticks
 	draw_line(21, 21, 21, 29, 0x7BEF);
@@ -1507,26 +1891,17 @@ void draw_trash_both(short int light_color, short int dark_color) {
     volatile int *pixel_ctrl_ptr = (int *)FRAME_BASE;
     int back = *(pixel_ctrl_ptr + 1);
     int other = (back == (int)&Buffer1) ? (int)&Buffer2 : (int)&Buffer1;
-    int *back_cache  = (back  == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
-    int *other_cache = (other == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
 
     // back buffer: erase cursor, draw trash, re-cache (no cursor redraw)
     pixel_buffer_start = back;
-    erase_cursor(mouseX, mouseY, back_cache);
-    fill_area(0, 20, 0, 20, 0x39E7);
     draw_trash(light_color, dark_color);
-    cache_cursor_bg(mouseX, mouseY, back_cache);
 
     // other buffer: same
     pixel_buffer_start = other;
-    erase_cursor(mouseX, mouseY, other_cache);
-    fill_area(0, 20, 0, 20, 0x39E7);
     draw_trash(light_color, dark_color);
-    cache_cursor_bg(mouseX, mouseY, other_cache);
 
     pixel_buffer_start = back;
 }
-
 void draw_trash(short int light_color, short int dark_color) {
 
 	//bin top
@@ -1554,8 +1929,8 @@ void draw_record_button_active() {
     volatile int *pixel_ctrl_ptr = (int *)FRAME_BASE;
     int back = *(pixel_ctrl_ptr + 1);
     int other = (back == (int)&Buffer1) ? (int)&Buffer2 : (int)&Buffer1;
-    int *other_cache = (other == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
-    int *back_cache  = (back  == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
+    short int *other_cache = (other == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
+    short int *back_cache  = (back  == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
 
     for (int buf = 0; buf < 2; buf++) {
         pixel_buffer_start = (buf == 0) ? back : other;
@@ -1581,8 +1956,8 @@ void draw_record_button_inactive() {
     volatile int *pixel_ctrl_ptr = (int *)FRAME_BASE;
     int back = *(pixel_ctrl_ptr + 1);
     int other = (back == (int)&Buffer1) ? (int)&Buffer2 : (int)&Buffer1;
-    int *other_cache = (other == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
-    int *back_cache  = (back  == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
+    short int *other_cache = (other == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
+    short int *back_cache  = (back  == (int)&Buffer1) ? cursor_bg_buffer1 : cursor_bg_buffer2;
 
     for (int buf = 0; buf < 2; buf++) {
         pixel_buffer_start = (buf == 0) ? back : other;
@@ -1697,7 +2072,7 @@ void wait_for_vsync() {
 	//wait to clear and draw the next line till the S bit in the 
 	//status register becomes 1
 	while ((*status_reg & 0x1) != 0) {
-		update_hardware();
+		update_audio();
 	}
 }
 
