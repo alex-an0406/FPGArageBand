@@ -1,6 +1,4 @@
-# ECE243_project
-
-
+# FGPArageBand
 
 1.0 Project Description
 
